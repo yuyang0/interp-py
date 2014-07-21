@@ -15,5 +15,6 @@ This repository is a python interpreter which is implemented by python itself.
 
 ## the end
 
-since this project is just used to learn how to write a interpreter for mainstream programming
-languages, my goal is not to write a complete Interpreter, just the core part of python.
+This project is just used to learn how to write a interpreter for mainstream programming
+languages, my goal is not to write a complete python interpreter, so I just implemented
+the core part of python.
