@@ -4,6 +4,9 @@
 """
 interpreter for python
 """
+import os
+import os.path
+
 from util import *
 from environment import *
 from values import *
@@ -237,7 +240,7 @@ def value_of_exp(exp, env):
                 keywords[var] = val
 
         if IS(func, ClassValue):
-            constructor = func.get_attr("__init__")
+            constructor = func.getattr("__init__")
             # bind self
             inst = InstanceValue(func, func.env)
             args = [inst] + args
@@ -252,7 +255,7 @@ def value_of_exp(exp, env):
             args = [inst] + args
             return apply_closure(func, args, keywords)
         elif IS(func, InstanceValue):  # a instance has __call__ method
-            call = func.get_attr("__call__")
+            call = func.getattr("__call__")
             if call is None:
                 fatal("this instance don't support call")
             else:
@@ -277,9 +280,9 @@ def value_of_exp(exp, env):
     elif IS(exp, ast.Attribute):
         val = value_of_exp(exp.value, env)
         if IS(val, ClassValue):
-            return val.get_attr(exp.attr)
+            return val.getattr(exp.attr)
         elif IS(val, InstanceValue):
-            return val.get_attr(exp.attr)
+            return val.getattr(exp.attr)
         else:
             print "unkown attribute value."
         # TODO:
@@ -290,7 +293,7 @@ def value_of_exp(exp, env):
             if IS(val, ListValue) or IS(val, TupleValue):
                 return val.getitem(idx)
             elif IS(val, InstanceValue):
-                getitem = val.get_attr("__getitem__")
+                getitem = val.getattr("__getitem__")
                 if getitem is None:
                     fatal("this class don't support get slice")
                 else:
@@ -303,7 +306,7 @@ def value_of_exp(exp, env):
             if IS(val, ListValue) or IS(val, TupleValue):
                 val.getslice(lower, upper, step)
             elif IS(val, InstanceValue):
-                getslice = val.get_attr("__getslice__")
+                getslice = val.getattr("__getslice__")
                 if getslice is None:
                     fatal("this class don't support get slice")
                 else:
@@ -321,8 +324,10 @@ def value_of_exp(exp, env):
             raise
 
     elif IS(exp, ast.Name):
-        if exp.id in global_names:  # a global name
-            env1 = module_env
+        # if exp.id in global_names:  # a global name
+        #     env1 = module_env
+        if interp.cur_mod.is_global(exp.id):
+            env1 = interp.cur_mod.env
         else:
             env1 = env
         try:
@@ -436,14 +441,43 @@ def value_of_stmts(stmts, env):
     elif IS(stmt, ast.Assert):
         pass
     elif IS(stmt, ast.Import):
-        pass
+        for a in stmt.names:
+            mod = interp.load_module(a.name)
+            if a.asname is not None:
+                env.put_or_update(a.asname, mod)
+            else:
+                # get the first segement of module name
+                local_name = a.name.partition(".")[0]
+                env.put_or_update(local_name, mod)
+    # level: 0 is absolute import, 1 is current directory,
+    # 2 is parent directory
     elif IS(stmt, ast.ImportFrom):
-        pass
+        mod = interp.load_module(stmt.module, stmt.level)
+        if IS(mod, PackageValue):     # a package
+            for a in stmt.names:
+                val = mod.getattr(a.name)
+                if val is None:
+                    pass
+
+                if a.asname is None:
+                    env.put_or_update(a.name, val)
+                else:
+                    env.put_or_update(a.asname, val)
+        else:                   # a regular moudle
+            for a in stmt.names:
+                val = mod.getattr(a.name)
+                if val is None:
+                    fatal("this module don't have the attribute")
+                if a.asname is None:
+                    env.put_or_update(a.name, val)
+                else:
+                    env.put_or_update(a.asname, val)
     elif IS(stmt, ast.Exec):
         pass
     elif IS(stmt, ast.Global):
         for name in stmt.names:
-            global_names.add(name)
+            # global_names.add(name)
+            interp.cur_mod.add_global(name)
     elif IS(stmt, ast.Expr):
         val = value_of_exp(stmt.value, env)
         return value_of_stmts(rest_stmts, env)
@@ -459,17 +493,17 @@ def value_of_stmts(stmts, env):
 module_env = None
 global_names = None
 
-def value_of_mod(fname, mod):
+def value_of_mod(fname, node):
     global module_env, global_names
     val = ModuleValue(fname, fname, built_in_env)
     module_env = val.env
     global_names = set()
-    if IS(mod, ast.Module):
-        value_of_stmts(mod.body, module_env)
+    if IS(node, ast.Module):
+        value_of_stmts(node.body, module_env)
         return val
-    elif IS(mod, ast.Interactive):
+    elif IS(node, ast.Interactive):
         pass
-    elif IS(mod, ast.Expression):
+    elif IS(node, ast.Expression):
         pass
     else:
         print "error: unkown MOD type."
@@ -488,6 +522,91 @@ def eval_string(s):
     return value_of_mod(node, init_env())
 
 
+class Interpreter(object):
+    def __init__(self):
+        self.main_mod = None
+        self.cur_mod = None
+        self.import_stk = []                # detect the import cycle
+        self.mod_cache = {}
+        self.root_dir = None    # main directory of the software
+
+    def start(self, fname):
+        """
+        the entry point of the interpreter
+        """
+        node = parse_file(fname)
+        val = ModuleValue(fname, "__main__", built_in_env)
+        self.cur_mod = val
+        self.main_mod = val
+        self.import_stk.append(fname)
+        self.mod_cache[fname] = val
+        self.root_dir = os.path.dirname(fname)
+
+        if IS(node, ast.Module):
+            value_of_stmts(node.body, self.cur_mod.env)
+            return val
+        else:
+            fatal("error: unkown MOD type.")
+
+        print "-------------final value----------------------"
+        print val
+        print "----------------------------------------------"
+
+    def load_file(self, fname):
+        relpath = os.path.relpath(fname, self.root_dir)
+        mod_name = relpath.replace(os.sep, ".")
+        if os.path.isdir(fname):   # package
+            fname = os.path.join(fname, "__init__.py")
+
+        if fname in self.import_stk:    # import cycle
+            fatal("error: import cycle.")
+        self.import_stk.append(fname)
+
+        if fname in self.mod_cache:    # already in cache
+            return self.mod_cache[fname]
+
+        node = parse_file(fname)
+        if os.path.basename(fname) == "__init__.py":  # a package
+            val = PackageValue(fname, mod_name, built_in_env)
+        else:                   # a module
+            val = ModuleValue(fname, mod_name, built_in_env)
+
+        prev = self.cur_mod
+        self.cur_mod = val
+
+        if IS(node, ast.Module):
+            value_of_stmts(node.body, val.env)
+        else:
+            fatal("error: unkown MOD type.")
+        self.cur_mod = prev     # restore the current module
+        return val
+
+    def load_module(self, name, level=0):
+        '''
+        load a module and return the module value
+        '''
+        if levle == 0:
+            start_dir = self.root_dir
+        elif level > 0:
+            start_dir = self.cur_mod.fname
+            for i in range(level):
+                start_dir = os.path.dirname(start_dir)
+        else:
+            fatal("level must be a positive integer")
+        name_segs = name.split(".")
+        prev = None
+        fname = start_dir
+        for n in name_segs:
+            fname = os.path.join(fname, n)
+            mod_val = self.load_file(fname)
+            if prev is not None:
+                prev.env.put(n, mod_val)
+            prev = mod_val
+        return prev
+
+
 if __name__ == '__main__':
     # eval_file("test/1.py")
-    eval_file("test/2.py")
+    # eval_file("test/2.py")
+    interp = Interpreter()
+    interp.start("test/2.py")

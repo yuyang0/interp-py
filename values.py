@@ -27,10 +27,10 @@ class NoneValue(Value):
 ######################################################################
 class NumValue(Value):
     """
-    this is a base class of all the numerial values. it is mainly used to
+    this is the base class of all the numerial values. it is mainly used to
     implement arithmetical operations, we can use the special method to
     simplify the code, but in order to make the interpreter to be implemented
-    easily in other languages(like java etc), we avoid using these method
+    easily in other languages(like java etc), we avoid using these methods
 
     + : (number,number), (string,string), (list,list), (tuple,tuple)
         and instance which has __add__ method
@@ -88,7 +88,8 @@ class FloatValue(NumValue):
 
 class BoolValue(IntValue):
     """
-    in python True is identical to 1, False is identical to 0
+    in python True is identical to 1, False is identical to 0, so BoolValue
+    is subclass of IntValue
     """
     def __init__(self, val):
         self.value = val
@@ -98,30 +99,32 @@ class BoolValue(IntValue):
 ##################################################################
 
 class SeqValue(Value):
+    # def len(self):
+    #     return len(self.value)
     def len(self):
-        return len(self.value)
+        ret = len(self.value)
+        return IntValue(ret)
 
     def getitem(self, idx):
         return self.value[idx]
 
-    def setitem(self, idx, val):
-        self.value[idx] = val
-
     def getslice(self, lower=0, upper=None, step=1):
         if upper is None:
             upper = len(self.value)+1
-        ret = []
-        for i in range(lower, upper, step):
-            ret.append(self.value[i])
-        return ret
+        ret = self.value[lower:upper:step]
+        return self.__class__(ret)
 
-    def setslice(self, lower, upper, val):
-        if not IS(self, ListValue):
-            fatal("only list value support set slice")
+    def contains(self, ele):
+        ret = ele in self.value
+        return BoolValue(ret)
 
 class StrValue(SeqValue):
     def __init__(self, val):
         self.value = val
+
+    def getitem(self, idx):
+        ret = self.value[idx]
+        return StrValue(ret)
 
     def add(self, obj):
         if not IS(obj, StrValue):
@@ -133,6 +136,12 @@ class StrValue(SeqValue):
             fatal("TypeError: can't multiply string with no-int value")
         return StrValue(self.value * obj.value)
 
+    def contains(self, ss):
+        if not IS(ss, StrValue):
+            return BoolValue(False)
+        ret = ss.value in self.value
+        return BoolValue(ret)
+
 class ListValue(SeqValue):
     def __init__(self, elts):
         self.value = list(elts)
@@ -143,9 +152,15 @@ class ListValue(SeqValue):
         return ListValue(self.value + obj.value)
 
     def mul(self, obj):
-        if not (IS(obj, IntValue) or IS(obj, BoolValue)):
+        if not IS(obj, IntValue):
             fatal("TypeError: can't multiply list with no-int value")
         return ListValue(self.value * obj.value)
+
+    def setitem(self, idx, val):
+        self.value[idx] = val
+
+    def setslice(self, lower, upper, val):
+        pass
 
     def __str__(self):
         ss = ' '.join(map(str, self.value))
@@ -161,7 +176,7 @@ class TupleValue(SeqValue):
         return TupleValue(self.value + obj.value)
 
     def mul(self, obj):
-        if not (IS(obj, IntValue) or IS(obj, BoolValue)):
+        if not IS(obj, IntValue):
             fatal("TypeError: can't multiply list with no-int value")
         return TupleValue(self.value * obj.value)
 
@@ -170,6 +185,10 @@ class TupleValue(SeqValue):
         return "(%s)" % ss
 
 class DictValue(Value):
+    """
+    key-value mappings:
+    1. key must be immutable types, so list, dict and set can't be a key
+    """
     def __init__(self, elts):
         self.value = dict(elts)
 
@@ -182,12 +201,18 @@ class DictValue(Value):
     def __str__(self):
         return "dict=>:" + str(self.value)
 
+    def contains(self, ele):
+        return ele in self.value
+
 class SetValue(Value):
     def __init__(self, elts):
         self.value = set(elts)
 
     def __str__(self):
         return str(self.value)
+
+    def contains(self, ele):
+        return ele in self.value
 
 ######################################################################
 # callable values include
@@ -250,21 +275,61 @@ class PrimFunValue(ClosureValue):
 #          module value
 ######################################################################
 class ModuleValue(Value):
+    """
+    module value has some special attributes:
+    1. __name__: full quialitfied name
+    2. __file__: file name of this moudle, if it is a package, this attribute
+                 must contain __init__.py
+    3. __package__: if it is a package, then this attribute is same as the
+                    __name__ attribute, otherwise it's the package
+    """
     def __init__(self, fname, name, p_env):
         self.fname = name
         self.name = name
+        if IS(self, PackageValue):
+            self.package = self.name
+        else:
+            self.package = self.name.rpartition(".")[0]
         self.env = ModuleEnv(p_env)
-
+        self.globals = set()
         # TODO: specify the correct value of these special attributes
         self.env.put("__name__", self.name)
         self.env.put("__file__", self.fname)
         self.env.put("__doc__", None)
+        self.env.put("__package__", self.package)
 
     def as_pyval(self):
         fatal("can't call as_pyval on module value")
 
-    def get_attr(self, name):
-        return self.env.lookup(name)
+    def add_global(self, name):
+        self.globals.add(name)
+
+    def is_global(self, name):
+        return (name in self.globals)
+
+    def getattr(self, name):
+        """
+        1. check if the moudle has __all__ attribute
+        2. if the moudle has __all__ attribute then check if name is in __all__
+        3. if the moudle doesn't has __all__ attribute then check if name starts
+           with _
+        """
+        try:
+            all_names = self.env.lookup("__all__")
+        except EnvLookupError:
+            all_names = None
+
+        if all_names is None:
+            if name.startswith("_"):
+                fatal("this moudle doesn't export name(%s)" % name)
+        else:
+            if all_names.contains(StrValue(name)):
+                fatal("this moudle doesn't export name(%s)" % name)
+
+        try:
+            return self.env.lookup(name)
+        except EnvLookupError:
+            return None
 
     def __str__(self):
         return "<Module:%s>" % self.name
@@ -272,6 +337,14 @@ class ModuleValue(Value):
     def __nonzero__(self):
         return True
 
+class PackageValue(ModuleValue):
+    """
+    packages are just a special kind of module, it has some special attribute:
+    1. __path__:
+    """
+    def __init__(self, fname, name, p_env):
+        super(PackageValue, self).__init__(fname, name, p_env)
+        self.env.put("__path__", None) # TODO
 ######################################################################
 #          class value
 ######################################################################
@@ -294,7 +367,7 @@ class ClassValue(Value):
     def as_pyval(self):
         fatal("can't call as_pyval on class value")
 
-    def get_attr(self, name):
+    def getattr(self, name):
         try:
             val = self.env.lookup(name)
             return val
@@ -302,7 +375,7 @@ class ClassValue(Value):
             if self.bases is None:
                 return None
             for base in self.bases:
-                val = base.get_attr(name)
+                val = base.getattr(name)
                 if val is not None:
                     return val
             return None
@@ -320,7 +393,7 @@ class InstanceValue(Value):
         self.env.put("__dict__", self.env.table)
 
     def __nonzero__(self):
-        nonzero = self.get_attr("__nonzero__")
+        nonzero = self.getattr("__nonzero__")
         if nonzero is None:
             return True
         else:
@@ -329,12 +402,12 @@ class InstanceValue(Value):
     def as_pyval(self):
         fatal("can't call as_pyval on instance value")
 
-    def get_attr(self, name):
+    def getattr(self, name):
         try:
             val = self.env.lookup(name)
             return val
         except EnvLookupError:
-            return self.cls.get_attr(name)
+            return self.cls.getattr(name)
 
 ######################################################################
 #          file value

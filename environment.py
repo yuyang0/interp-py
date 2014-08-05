@@ -45,7 +45,6 @@ class Env(object):
 
     def put(self, var, val):
         if var in self.table:
-            print "%s is already bind in this env" % var
             raise EnvBindError("%s is already bind in this env" % var)
         self.table[var] = val
 
