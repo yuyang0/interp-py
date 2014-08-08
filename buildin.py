@@ -26,11 +26,23 @@ def bool_fun(x=False):
 def str_fun(obj=""):
     return StrValue(str(obj))
 
-def list_fun(args):
-    return ListValue(list(args))
+def list_fun(arg):
+    if IS(arg, SeqValue) or IS(arg, DictValue) or IS(arg, SetValue):
+        return ListValue(arg.value)
+    elif IS(arg, InstanceValue):
+        pass
+    else:
+        pass
+    raise
 
-def tuple_fun(args):
-    return TupleValue(list(args))
+def tuple_fun(arg):
+    if IS(arg, SeqValue) or IS(arg, DictValue) or IS(arg, SetValue):
+        return TupleValue(arg.value)
+    elif IS(arg, InstanceValue):
+        pass
+    else:
+        pass
+    raise
 
 def dict_fun(iterable=None, **kwarg):
     if iterable is None:

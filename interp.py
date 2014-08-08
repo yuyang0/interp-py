@@ -4,6 +4,7 @@
 """
 interpreter for python
 """
+import ast
 import os
 import os.path
 
@@ -22,9 +23,9 @@ def bind(target, val, env):
     # for assign statement.
     elif IS(target, ast.Tuple) or IS(target, ast.Tuple):
         if IS(val, ListValue) or IS(val, TupleValue):
-            if len(target.elts) == len(val):
-                for i in xrange(len(val)):
-                    bind(target.elts[i], val[i], env)
+            if len(target.elts) == val.pylen():
+                for i in xrange(val.pylen()):
+                    bind(target.elts[i], val.value[i], env)
             elif len(target.elts) > len(val):
                 msg = "too few values to unpack."
                 raise EnvBindError(msg)
@@ -37,7 +38,7 @@ def bind(target, val, env):
             pass
         elif IS(tgt, DictValue):
             if IS(target.slice, ast.Index):
-                idx = pyval_of_exp(target.slice.value)
+                idx = value_of_exp(target.slice.value)
                 tgt.setitem(idx, val)
             else:
                 fatal("assigning to dict only supports index keys")
@@ -85,21 +86,18 @@ def apply_closure(clo, posargs, keywords=None,):
 # and, or
 def apply_boolop_exp(exp, env):
     def value_and(*exps):
-        ret = True
         for exp in exps:
             val = value_of_exp(exp, env)
-            if bool(val) is False:
-                ret = False
-                break
-        return BoolValue(ret)
+            if val.pybool() is False:
+                return false
+        return true
+
     def value_or(*exps):
-        ret = False
         for exp in exps:
             val = value_of_exp(exp, env)
-            if bool(val) is True:
-                ret = True
-                break
-        return BoolValue(ret)
+            if val.pybool() is True:
+                return false
+        return true
 
     op = exp.op
     if IS(op, ast.And):
@@ -110,7 +108,6 @@ def apply_boolop_exp(exp, env):
         print "unkown bool operator"
 
 # binary operator: +, -, *, /
-#TODO: support list add and class operators
 def apply_binop_exp(exp, env):
     l_val = value_of_exp(exp.left, env)
     r_val = value_of_exp(exp.right, env)
@@ -124,15 +121,15 @@ def apply_binop_exp(exp, env):
     elif IS(op, ast.Div):
         return l_val.div(r_val)
     else:
-        fatal('unkown binary operator.')
+        fatal('unkown binary operator %s' % op)
 
 
 # unary operator: not
 def apply_unaryop_exp(exp, env):
     op = exp.op
-    rand = pyval_of_exp(exp.operand, env)
+    rand = value_of_exp(exp.operand, env)
     if IS(op, ast.Not):
-        return BoolValue(not rand)
+        return BoolValue(not rand.pybool())
     elif IS(op, ast.Invert):
         pass
     elif IS(op, ast.UAdd):
@@ -140,38 +137,46 @@ def apply_unaryop_exp(exp, env):
     elif IS(op, ast.USub):
         pass
     else:
-        print "unkown UnaryOp type(%s)" % op
-        raise
+        fatal("unkown UnaryOp type(%s)" % op)
 
 
 # compare Operator: ==, !=, <, <=, >, >=,is, is not, in, not in
 def apply_comop_exp(exp, env):
-    def apply_a_comop(rand1, op, rand2):
+    def apply_a_comop(left, op, right):
+        rand1 = value_of_exp(left, env)
+        rand2 = value_of_exp(right, env)
+
         if IS(op, ast.Eq):
-            return rand1 == rand2
+            return rand1.eq(rand2)
         elif IS(op, ast.NotEq):
-            return rand1 != rand2
+            return rand1.neq(rand2)
         elif IS(op, ast.Lt):
-            return rand1 < rand2
+            return rand1.lt(rand2)
         elif IS(op, ast.LtE):
-            return rand1 <= rand2
+            return rand1.lte(rand2)
         elif IS(op, ast.Gt):
-            return rand1 > rand2
+            return rand1.gt(rand2)
         elif IS(op, ast.GtE):
-            return rand1 >= rand2
+            return rand1.gte(rand2)
+        # Not Implemented
         elif IS(op, ast.Is):
-            return rand1 is rand2
+            return rand2.contains(rand1)
         elif IS(op, ast.IsNot):
             return rand1 is not rand2
         elif IS(op, ast.In):
-            return rand1 in rand2
+            return rand1.contains(rand2)
         elif IS(op, ast.NotIn):
-            return rand1 not in rand2
-    left = pyval_of_exp(exp.left, env)
+            ret = rand1.contains(rand2)
+            return BoolValue(not ret.pybool())
+    left = exp.left
     ops = exp.ops
-    rest_rands = map(lambda e: pyval_of_exp(e, env), exp.comparators)
-    ret = foldl(apply_a_comop, left, ops, rest_rands)
-    return BoolValue(ret)
+    rest_rands = exp.comparators
+    for op, right in zip(ops, rest_rands):
+        ret = apply_a_comop(left, op, right)
+        if ret.pybool() is False:
+            return BoolValue(False)
+        left = right
+    return BoolValue(True)
 
 
 def pyval_of_exp(exp, env):
@@ -190,18 +195,18 @@ def value_of_exp(exp, env):
     elif IS(exp, ast.Lambda):
         return LambdaValue(exp, env)
     elif IS(exp, ast.IfExp):
-        t_val = pyval_of_exp(exp.test, env)
-        if t_val:
+        t_val = value_of_exp(exp.test, env)
+        if t_val.pybool():
             return value_of_exp(exp.body, env)
         else:
             return value_of_exp(exp.orelse, env)
     elif IS(exp, ast.Dict):
         # keys need be python value
-        keys = map(lambda e: pyval_of_exp(e, env), exp.keys)
+        keys = map(lambda e: value_of_exp(e, env), exp.keys)
         values = map(lambda e: value_of_exp(e, env), exp.values)
         return DictValue(zip(keys, values))
     elif IS(exp, ast.Set):
-        elts = map(lambda e: pyval_of_exp(e, env), exp.elts)
+        elts = map(lambda e: value_of_exp(e, env), exp.elts)
         return SetValue(elts)
     elif IS(exp, ast.ListComp):
         pass
@@ -289,8 +294,8 @@ def value_of_exp(exp, env):
     elif IS(exp, ast.Subscript):
         val = value_of_exp(exp.value, env)
         if IS(exp.slice, ast.Index):
-            idx = pyval_of_exp(exp.slice.value, env)
-            if IS(val, ListValue) or IS(val, TupleValue):
+            idx = value_of_exp(exp.slice.value, env)
+            if IS(val, SeqValue) or IS(val, DictValue):
                 return val.getitem(idx)
             elif IS(val, InstanceValue):
                 getitem = val.getattr("__getitem__")
@@ -317,15 +322,8 @@ def value_of_exp(exp, env):
             pass
         else:
             pass
-        if IS(val, ListValue) or IS(val, TupleValue):
-            return val[idx]
-        else:
-            print "only list and tuple support subscript expression."
-            raise
 
     elif IS(exp, ast.Name):
-        # if exp.id in global_names:  # a global name
-        #     env1 = module_env
         if interp.cur_mod.is_global(exp.id):
             env1 = interp.cur_mod.env
         else:
@@ -352,6 +350,7 @@ def value_of_stmts(stmts, env):
         return cont  # return without find a return statement
     stmt = stmts[0]
     rest_stmts = stmts[1:]
+
     if IS(stmt, ast.FunctionDef):
         if IS(env, ClassEnv):   # a class method
             clo = MethodValue(stmt, env)
@@ -401,13 +400,13 @@ def value_of_stmts(stmts, env):
     elif IS(stmt, ast.For):
         pass
     elif IS(stmt, ast.While):
-        test = pyval_of_exp(stmt.test, env)
-        while test:
+        t_val = value_of_exp(stmt.test, env)
+        while t_val.pybool():
             val = value_of_stmts(stmt.body, env)
             if val == "break":
                 return value_of_stmts(rest_stmts, env)
             elif val == "continue" or val == cont:
-                test = pyval_of_exp(stmt.test, env)
+                t_val = value_of_exp(stmt.test, env)
             else:               # find a return statement.
                 return val
         # when the loop exits normally, we need run the else block
@@ -421,8 +420,8 @@ def value_of_stmts(stmts, env):
                 return val
 
     elif IS(stmt, ast.If):
-        test_val = pyval_of_exp(stmt.test, env)
-        if test_val:
+        t_val = value_of_exp(stmt.test, env)
+        if t_val.pybool():
             val = value_of_stmts(stmt.body, env)
         else:
             val = value_of_stmts(stmt.orelse, env)
@@ -604,9 +603,10 @@ class Interpreter(object):
             prev = mod_val
         return prev
 
+interp = Interpreter()
 
 if __name__ == '__main__':
     # eval_file("test/1.py")
     # eval_file("test/2.py")
-    interp = Interpreter()
     interp.start("test/2.py")
+    # interp.start("test/1.py")

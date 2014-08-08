@@ -12,11 +12,59 @@ class Value(object):
     def as_pyval(self):
         return self.value
 
-    def __nonzero__(self):      # suppoert bool primary function
-        return bool(self.value)
-
     def __str__(self):
         return str(self.value)
+
+    def pybool(self):
+        """
+        return True or False (not BoolValue)
+        """
+        return bool(self.value)
+
+    def bool(self):
+        return BoolValue(self.pybool())
+
+    def pycmp(self, obj):
+        """
+        all other comparison methods such as cmp, lt, lte depends on this
+        method, so this mthod need override in the subclass
+        """
+        if not IS(obj, NumValue):
+            return -1              # arbitrary value
+
+        if self.value == obj.value:
+            return 0
+        elif self.value > obj.value:
+            return 1
+        else:
+            return -1
+
+    def cmp(self, obj):
+        return IntValue(self.pycmp(obj))
+
+    def eq(self, obj):
+        ret = True if self.pycmp(obj) == 0 else False
+        return BoolValue(ret)
+
+    def neq(self, obj):
+        ret = True if self.pycmp(obj) != 0 else False
+        return BoolValue(ret)
+
+    def lt(self, obj):
+        ret = True if self.pycmp(obj) < 0 else False
+        return BoolValue(ret)
+
+    def lte(self, obj):
+        ret = True if self.pycmp(obj) <= 0 else False
+        return BoolValue(ret)
+
+    def gt(self, obj):
+        ret = True if self.pycmp(obj) > 0 else False
+        return BoolValue(ret)
+
+    def gte(self, obj):
+        ret = True if self.pycmp(obj) >= 0 else False
+        return BoolValue(ret)
 
 class NoneValue(Value):
     def __init__(self):
@@ -99,14 +147,20 @@ class BoolValue(IntValue):
 ##################################################################
 
 class SeqValue(Value):
-    # def len(self):
-    #     return len(self.value)
+    def pylen(self):
+        return len(self.value)
+
     def len(self):
         ret = len(self.value)
         return IntValue(ret)
 
     def getitem(self, idx):
-        return self.value[idx]
+        """
+        need override for string value.
+        """
+        if not IS(idx, IntValue):
+            fatal("TypeError, index of sequence must be a integer.")
+        return self.value[idx.value]
 
     def getslice(self, lower=0, upper=None, step=1):
         if upper is None:
@@ -114,16 +168,20 @@ class SeqValue(Value):
         ret = self.value[lower:upper:step]
         return self.__class__(ret)
 
-    def contains(self, ele):
-        ret = ele in self.value
-        return BoolValue(ret)
+    def contains(self, obj):
+        for ele in self.value:
+            if obj.pycmp(ele) == 0:
+                return BoolValue(True)
+        return BoolValue(False)
 
 class StrValue(SeqValue):
     def __init__(self, val):
         self.value = val
 
     def getitem(self, idx):
-        ret = self.value[idx]
+        if not IS(idx, IntValue):
+            fatal("TypeError, index of sequence must be a integer.")
+        ret = self.value[idx.value]
         return StrValue(ret)
 
     def add(self, obj):
@@ -138,9 +196,11 @@ class StrValue(SeqValue):
 
     def contains(self, ss):
         if not IS(ss, StrValue):
-            return BoolValue(False)
-        ret = ss.value in self.value
+            fatal("'in <string>' requires string as left operand")
+
+        ret = (ss.value in self.value)
         return BoolValue(ret)
+
 
 class ListValue(SeqValue):
     def __init__(self, elts):
@@ -157,7 +217,9 @@ class ListValue(SeqValue):
         return ListValue(self.value * obj.value)
 
     def setitem(self, idx, val):
-        self.value[idx] = val
+        if not IS(idx, IntValue):
+            fatal("TypeError: index of list must be an integer.")
+        self.value[idx.pyval()] = val
 
     def setslice(self, lower, upper, val):
         pass
@@ -201,8 +263,11 @@ class DictValue(Value):
     def __str__(self):
         return "dict=>:" + str(self.value)
 
-    def contains(self, ele):
-        return ele in self.value
+    def contains(self, obj):
+        for k in self.value:
+            if obj.pycmp(k) == 0:
+                return BoolValue(True)
+        return BoolValue(False)
 
 class SetValue(Value):
     def __init__(self, elts):
@@ -211,8 +276,11 @@ class SetValue(Value):
     def __str__(self):
         return str(self.value)
 
-    def contains(self, ele):
-        return ele in self.value
+    def contains(self, obj):
+        for ele in self.value:
+            if obj.pycmp(ele) == 0:
+                return BoolValue(True)
+        return BoolValue(False)
 
 ######################################################################
 # callable values include
@@ -238,18 +306,8 @@ class ClosureValue(Value):
     def as_pyval(self):
         fatal("can't call as_pyval on closure value")
 
-    def __nonzero__(self):
+    def pybool(self):
         return True
-    # def apply(self, posargs, keywords, starargs, kwargs):
-    #     new_env = Env(self.env)
-    #     for var, val in zip(self.posargs, posargs):
-    #         new_env.put(var, val)
-    #     for var, val in keywords.items():
-    #         new_env.put(var, val)
-    #     new_env.put(self.vararg, starargs)
-    #     new_env.put(self.kwarg, kwargs)
-    #     # TODO: maybe need to creat a new enviroment
-    #     return value_of_stmts(self.body, new_env)
 
 class LambdaValue(ClosureValue):
     def __init__(self, func, env):
@@ -334,7 +392,7 @@ class ModuleValue(Value):
     def __str__(self):
         return "<Module:%s>" % self.name
 
-    def __nonzero__(self):
+    def pybool(self):
         return True
 
 class PackageValue(ModuleValue):
@@ -361,7 +419,7 @@ class ClassValue(Value):
         self.env.put("__bases__", bases)
         self.env.put("__doc__", None)
 
-    def __nonzero__(self):
+    def pybool(self):
         return True
 
     def as_pyval(self):
@@ -392,7 +450,7 @@ class InstanceValue(Value):
         self.env.put("__class__", cls)
         self.env.put("__dict__", self.env.table)
 
-    def __nonzero__(self):
+    def pybool(self):
         nonzero = self.getattr("__nonzero__")
         if nonzero is None:
             return True
@@ -409,9 +467,20 @@ class InstanceValue(Value):
         except EnvLookupError:
             return self.cls.getattr(name)
 
+    def contains(self, obj):    # TODO:
+        contain = self.getattr("__contains__")
+        # TODO: invoke the contains method
+
 ######################################################################
 #          file value
 ######################################################################
 class FileValue(Value):
     def __init__(self, fname, flag):
         pass
+
+######################################################################
+#          global constants
+######################################################################
+none = NoneValue()
+true = BoolValue(True)
+false = BoolValue(False)
