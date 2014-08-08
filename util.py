@@ -7,6 +7,7 @@ utilities
 import sys
 import ast
 
+__all__ = ["parse_file", "parse_str", "IS", "fatal", "get_id", "dict_sub"]
 
 def parse_file(name):
     try:
