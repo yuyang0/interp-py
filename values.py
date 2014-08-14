@@ -15,6 +15,9 @@ class Value(object):
     def __str__(self):
         return str(self.value)
 
+    def __hash__(self):
+        fatal("TypeError: unhashable type")
+
     def pybool(self):
         """
         return True or False (not BoolValue)
@@ -70,6 +73,8 @@ class NoneValue(Value):
     def __init__(self):
         self.value = None
 
+    def __hash__(self):
+        return hash(None)
 ######################################################################
 #          numerical value
 ######################################################################
@@ -88,6 +93,8 @@ class NumValue(Value):
     / : (number, number) and instance which has __div__ method
 
     """
+    def __hash__(self):
+        return hash(self.value)
 
     def add(self, obj):
         if not IS(obj, NumValue):
@@ -171,12 +178,15 @@ class SeqValue(Value):
     def contains(self, obj):
         for ele in self.value:
             if obj.pycmp(ele) == 0:
-                return BoolValue(True)
-        return BoolValue(False)
+                return true
+        return false
 
 class StrValue(SeqValue):
     def __init__(self, val):
         self.value = val
+
+    def __hash__(self):
+        return hash(self.value)
 
     def getitem(self, idx):
         if not IS(idx, IntValue):
@@ -199,7 +209,7 @@ class StrValue(SeqValue):
             fatal("'in <string>' requires string as left operand")
 
         ret = (ss.value in self.value)
-        return BoolValue(ret)
+        return {True: true, False: false}[ret]
 
 
 class ListValue(SeqValue):
@@ -231,6 +241,9 @@ class ListValue(SeqValue):
 class TupleValue(SeqValue):
     def __init__(self, elts):
         self.value = tuple(elts)
+
+    def __hash__(self):
+        return hash(self.value)
 
     def add(self, obj):
         if not IS(obj, TupleValue):
@@ -266,8 +279,8 @@ class DictValue(Value):
     def contains(self, obj):
         for k in self.value:
             if obj.pycmp(k) == 0:
-                return BoolValue(True)
-        return BoolValue(False)
+                return true
+        return false
 
 class SetValue(Value):
     def __init__(self, elts):
@@ -279,8 +292,8 @@ class SetValue(Value):
     def contains(self, obj):
         for ele in self.value:
             if obj.pycmp(ele) == 0:
-                return BoolValue(True)
-        return BoolValue(False)
+                return true
+        return false
 
 ######################################################################
 # callable values include
@@ -296,18 +309,63 @@ class SetValue(Value):
 class ClosureValue(Value):
     def __init__(self, func, env):   # func is ast node
         self.env = env
-        self.posargs = map(get_id, func.args.args)  # positional arguments
+        self.posargs = map(get_id, func.args.args)  # positional parameters
         self.vararg = func.args.vararg              # string
         self.kwarg = func.args.kwarg                # string
         self.defaults = func.args.defaults          # exp list
 
+        self.default_map = {}
+        default_params = self.posargs[len(self.posargs) - len(self.defaults):]
+
+        from interp import value_of_exp
+        for var, exp in zip(default_params, self.defaults):
+            self.default_map[var] = value_of_exp(exp, env)
         self.body = func.body
+
+    def bind_args(self, posargs, keywords):
+        """
+        bind the argument and return a new environment
+        """
+        new_env = LocalEnv(self.env)
+        # bind positional arguments
+        mappings, rest_params, rest_args = partial_zip(self.posargs, posargs)
+        for var, val in mappings:
+            new_env.put(var, val)
+        if self.vararg is None:
+            if rest_args != []:
+                fatal("too many positional arguments")
+        else:
+            new_env.put(self.vararg, TupleValue(rest_args))
+
+        # bind keyword arguments
+        unbound_params = []
+        for param in rest_params:
+            if param in keywords:
+                new_env.put(param, keywords[param])
+                del keywords[param]
+            else:
+                unbound_params.append(param)
+        if self.kwarg is None:
+            if keywords != {}:
+                fatal("too many keyword arguments")
+        else:
+            new_env.put(self.kwargs, DictValue(keywords))
+
+        rest_params = unbound_params
+        # bind default value
+        for param in rest_params:
+            if param in self.default_map:
+                new_env.put(param, self.default_map[param])
+            else:
+                fatal("A parameter(%s) left unbound." % param)
+        return new_env
 
     def as_pyval(self):
         fatal("can't call as_pyval on closure value")
 
     def pybool(self):
         return True
+
 
 class LambdaValue(ClosureValue):
     def __init__(self, func, env):
@@ -349,7 +407,7 @@ class ModuleValue(Value):
         else:
             self.package = self.name.rpartition(".")[0]
         self.env = ModuleEnv(p_env)
-        self.globals = set()
+
         # TODO: specify the correct value of these special attributes
         self.env.put("__name__", self.name)
         self.env.put("__file__", self.fname)
@@ -359,35 +417,35 @@ class ModuleValue(Value):
     def as_pyval(self):
         fatal("can't call as_pyval on module value")
 
-    def add_global(self, name):
-        self.globals.add(name)
-
-    def is_global(self, name):
-        return (name in self.globals)
-
     def getattr(self, name):
         """
-        1. check if the moudle has __all__ attribute
-        2. if the moudle has __all__ attribute then check if name is in __all__
-        3. if the moudle doesn't has __all__ attribute then check if name starts
-           with _
+
         """
-        try:
-            all_names = self.env.lookup("__all__")
-        except EnvLookupError:
-            all_names = None
+        val = self.env.lookup_local(name)
+        return val
 
+    def import_all(self, env):
+        """
+        only invoked when uses statement like this: from xxx import *
+        1. check if the moudle has __all__ attribute
+        2. if the moudle has __all__ attribute then check if name is in
+           __all__
+        3. if the module doesn't have __all__ attribute then check if name
+           starts with _
+        """
+        all_names = self.env.lookup_local("__all__")
         if all_names is None:
-            if name.startswith("_"):
-                fatal("this moudle doesn't export name(%s)" % name)
+            all_names = map(lambda v: v.value, all_names.value)
+            for name in all_names:
+                val = self.env.lookup_local(name)
+                if val is None:
+                    fatal("")
+                env.put(name, val)
         else:
-            if all_names.contains(StrValue(name)):
-                fatal("this moudle doesn't export name(%s)" % name)
-
-        try:
-            return self.env.lookup(name)
-        except EnvLookupError:
-            return None
+            for name in self.env.table:
+                if name.startswith("_"):
+                    continue
+                env.put(name, self.env.table[name])
 
     def __str__(self):
         return "<Module:%s>" % self.name
@@ -419,6 +477,8 @@ class ClassValue(Value):
         self.env.put("__bases__", bases)
         self.env.put("__doc__", None)
 
+    def __str__(self):
+        return "Class: %s" % self.name
     def pybool(self):
         return True
 
@@ -426,17 +486,17 @@ class ClassValue(Value):
         fatal("can't call as_pyval on class value")
 
     def getattr(self, name):
-        try:
-            val = self.env.lookup(name)
-            return val
-        except EnvLookupError:
+        val = self.env.lookup_local(name)
+        if val is None:
             if self.bases is None:
                 return None
             for base in self.bases:
                 val = base.getattr(name)
                 if val is not None:
                     return val
-            return None
+                return None
+        else:
+            return val
 
 ######################################################################
 #          instance value
@@ -450,26 +510,76 @@ class InstanceValue(Value):
         self.env.put("__class__", cls)
         self.env.put("__dict__", self.env.table)
 
+    def __hash__(self):
+        hash_spec = self.getattr("__hash__")
+        if hash_spec is None:
+            fatal("TypeError: unhashable type")
+        else:
+            from interp import apply_closure
+            return apply_closure(hash_spec, [self])
+
+    def __str__(self):
+        return "<instance of %s>" % str(self.cls)
+
     def pybool(self):
         nonzero = self.getattr("__nonzero__")
         if nonzero is None:
             return True
         else:
-            return False        # TODO: invoke the nonzero method
+            # in order to avoid import cycle, we must import function
+            # in this place
+            from interp import apply_closure
+            return apply_closure(nonzero, [self])
 
-    def as_pyval(self):
-        fatal("can't call as_pyval on instance value")
+    def pycmp(self, obj):
+        pass
 
     def getattr(self, name):
-        try:
-            val = self.env.lookup(name)
-            return val
-        except EnvLookupError:
+        val = self.env.lookup_local(name)
+        if val is None:
             return self.cls.getattr(name)
+        else:
+            return val
 
     def contains(self, obj):    # TODO:
-        contain = self.getattr("__contains__")
-        # TODO: invoke the contains method
+        contains = self.getattr("__contains__")
+        if contains is None:
+            return false
+        else:
+            from interp import apply_closure
+            return apply_closure(contains, [self, obj])
+
+    def add(self, obj):
+        add_spe = self.getattr("__add__")
+        if add_spe is None:
+            fatal("TypeError: unsupported operand type(s) for +")
+        else:
+            from interp import apply_closure
+            return apply_closure(add_spe, [self, obj])
+
+    def sub(self, obj):
+        sub_spe = self.getattr("__sub__")
+        if sub_spe is None:
+            fatal("TypeError: unsupported operand type(s) for +")
+        else:
+            from interp import apply_closure
+            return apply_closure(sub_spe, [self, obj])
+
+    def mul(self, obj):
+        mul_spe = self.getattr("__mul__")
+        if mul_spe is None:
+            fatal("TypeError: unsupported operand type(s) for *")
+        else:
+            from interp import apply_closure
+            return apply_closure(mul_spe, [self, obj])
+
+    def div(self, obj):
+        div_spe = self.getattr("__div__")
+        if div_spe is None:
+            fatal("TypeError: unsupported operand type(s) for /")
+        else:
+            from interp import apply_closure
+            return apply_closure(div_spe, [self, obj])
 
 ######################################################################
 #          file value

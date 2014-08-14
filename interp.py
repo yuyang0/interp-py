@@ -16,22 +16,31 @@ from buildin import built_in_env
 class Cont(object):
     pass
 cont = Cont()
+call_stk = []
 
 def bind(target, val, env):
     if IS(target, ast.Name) or IS(target, str):
-        return env.put_or_update(get_id(target), val)
-    # for assign statement.
+        name = get_id(target)
+        local_val = env.lookup_local(name)
+        if local_val is None:
+            env.put(name, val)
+        elif local_val == "global":
+            g_env = env.find_global_env()
+            if g_env is None:
+                fatal("can't find global scope.")
+            else:
+                g_env.put_or_update(name, val)
+        else:
+            env.update(name, val)
     elif IS(target, ast.Tuple) or IS(target, ast.Tuple):
         if IS(val, ListValue) or IS(val, TupleValue):
             if len(target.elts) == val.pylen():
                 for i in xrange(val.pylen()):
                     bind(target.elts[i], val.value[i], env)
             elif len(target.elts) > len(val):
-                msg = "too few values to unpack."
-                raise EnvBindError(msg)
+                fatal("too few values to unpack.")
             else:
-                msg = "too many values to unpack"
-                raise EnvBindError(msg)
+                fatal("too many values to unpack")
     elif IS(target, ast.Subscript):
         tgt = value_of_exp(target.value, env)
         if IS(tgt, ListValue):
@@ -49,300 +58,23 @@ def bind(target, val, env):
     elif IS(target, ast.Attribute):
         tgt = value_of_exp(target.value, env)
         if IS(tgt, InstanceValue):
-            pass
+            tat.env.put_or_update(target.attr, val)
         elif IS(tgt, ClassValue):
-            pass
+            tat.env.put_or_update(target.attr, val)
         else:
             fatal("TypeError: assign to an attribute exp")
     else:
         raise EnvBindError("error type arguments.")
 
 def apply_closure(clo, posargs, keywords=None,):
-    new_env = Env(clo.env)
-    if len(posargs) > len(clo.posargs) and clo.vararg is None:
-        fatal("too many arguments")
-
-    # TODO: better implemention
-    if (clo.kwarg is None) and (dict_sub(keywords, dict.fromkeys(clo.posargs))):
-        fatal("too many keyword arguments")
-
-    for var, val in zip(clo.posargs, posargs[:len(clo.posargs)]):
-        new_env.put(get_id(var), val)
-    for var, val in keywords.items():
-        if var in clo.posargs:
-            if new_env.lookup_local(var) is None:
-                new_env.put(var, val)
-            else:
-                fatal("already bind in env")
-    if clo.vararg is not None:
-        new_env.put(clo.vararg, ListValue(posargs[len(clo.posargs):]))
-    if clo.kwarg is not None:
-        new_env.put(clo.kwarg, kwargs)
-
+    new_env = clo.bind_args(posargs, keywords)
     # TODO: maybe need to creat a new enviroment
     # new_env = Env(new_env)
-    return value_of_stmts(clo.body, new_env)
-
-# and, or
-def apply_boolop_exp(exp, env):
-    def value_and(*exps):
-        for exp in exps:
-            val = value_of_exp(exp, env)
-            if val.pybool() is False:
-                return false
-        return true
-
-    def value_or(*exps):
-        for exp in exps:
-            val = value_of_exp(exp, env)
-            if val.pybool() is True:
-                return false
-        return true
-
-    op = exp.op
-    if IS(op, ast.And):
-        return value_and(*exp.values)
-    elif IS(op, ast.Or):
-        return value_or(*exp.values)
+    ret = value_of_stmts(clo.body, new_env)
+    if ret == cont:
+        return none
     else:
-        print "unkown bool operator"
-
-# binary operator: +, -, *, /
-def apply_binop_exp(exp, env):
-    l_val = value_of_exp(exp.left, env)
-    r_val = value_of_exp(exp.right, env)
-    op = exp.op
-    if IS(op, ast.Add):
-        return l_val.add(r_val)
-    elif IS(op, ast.Sub):
-        return l_val.sub(r_val)
-    elif IS(op, ast.Mult):
-        return l_val.mul(r_val)
-    elif IS(op, ast.Div):
-        return l_val.div(r_val)
-    else:
-        fatal('unkown binary operator %s' % op)
-
-
-# unary operator: not
-def apply_unaryop_exp(exp, env):
-    op = exp.op
-    rand = value_of_exp(exp.operand, env)
-    if IS(op, ast.Not):
-        return BoolValue(not rand.pybool())
-    elif IS(op, ast.Invert):
-        pass
-    elif IS(op, ast.UAdd):
-        pass
-    elif IS(op, ast.USub):
-        pass
-    else:
-        fatal("unkown UnaryOp type(%s)" % op)
-
-
-# compare Operator: ==, !=, <, <=, >, >=,is, is not, in, not in
-def apply_comop_exp(exp, env):
-    def apply_a_comop(left, op, right):
-        rand1 = value_of_exp(left, env)
-        rand2 = value_of_exp(right, env)
-
-        if IS(op, ast.Eq):
-            return rand1.eq(rand2)
-        elif IS(op, ast.NotEq):
-            return rand1.neq(rand2)
-        elif IS(op, ast.Lt):
-            return rand1.lt(rand2)
-        elif IS(op, ast.LtE):
-            return rand1.lte(rand2)
-        elif IS(op, ast.Gt):
-            return rand1.gt(rand2)
-        elif IS(op, ast.GtE):
-            return rand1.gte(rand2)
-        # Not Implemented
-        elif IS(op, ast.Is):
-            return rand2.contains(rand1)
-        elif IS(op, ast.IsNot):
-            return rand1 is not rand2
-        elif IS(op, ast.In):
-            return rand1.contains(rand2)
-        elif IS(op, ast.NotIn):
-            ret = rand1.contains(rand2)
-            return BoolValue(not ret.pybool())
-    left = exp.left
-    ops = exp.ops
-    rest_rands = exp.comparators
-    for op, right in zip(ops, rest_rands):
-        ret = apply_a_comop(left, op, right)
-        if ret.pybool() is False:
-            return BoolValue(False)
-        left = right
-    return BoolValue(True)
-
-
-def pyval_of_exp(exp, env):
-    if exp is None:
-        return None
-    val = value_of_exp(exp, env)
-    return val.as_pyval()
-
-def value_of_exp(exp, env):
-    if IS(exp, ast.BoolOp):
-        return apply_boolop_exp(exp, env)
-    elif IS(exp, ast.BinOp):
-        return apply_binop_exp(exp, env)
-    elif IS(exp, ast.UnaryOp):
-        return apply_unaryop_exp(exp, env)
-    elif IS(exp, ast.Lambda):
-        return LambdaValue(exp, env)
-    elif IS(exp, ast.IfExp):
-        t_val = value_of_exp(exp.test, env)
-        if t_val.pybool():
-            return value_of_exp(exp.body, env)
-        else:
-            return value_of_exp(exp.orelse, env)
-    elif IS(exp, ast.Dict):
-        # keys need be python value
-        keys = map(lambda e: value_of_exp(e, env), exp.keys)
-        values = map(lambda e: value_of_exp(e, env), exp.values)
-        return DictValue(zip(keys, values))
-    elif IS(exp, ast.Set):
-        elts = map(lambda e: value_of_exp(e, env), exp.elts)
-        return SetValue(elts)
-    elif IS(exp, ast.ListComp):
-        pass
-    elif IS(exp, ast.SetComp):
-        pass
-    elif IS(exp, ast.DictComp):
-        pass
-    elif IS(exp, ast.GeneratorExp):
-        pass
-    elif IS(exp, ast.Yield):
-        pass
-    elif IS(exp, ast.Compare):
-        return apply_comop_exp(exp, env)
-    elif IS(exp, ast.Call):
-        func = value_of_exp(exp.func, env)
-        args = map(lambda e: value_of_exp(e, env), exp.args)
-        keywords = {}
-        for var, val in exp.keywords:
-            keywords[var] = value_of_exp(val, env)
-        starargs = None
-        if exp.starargs is not None:
-            starargs = value_of_exp(exp.starargs, env)
-        kwargs = None
-        if exp.kwargs is not None:
-            kwargs = value_of_exp(exp.kwargs, env)
-
-        # merger positional arguments
-        if IS(starargs, ListValue) or IS(starargs, TupleValue) or\
-           IS(starargs, SetValue):
-            args += list(starargs.value)
-        # merger keyword arguments
-        if IS(kwargs, DictValue):
-            for var, val in kwargs.as_pyval():
-                if var in keywords:
-                    fatal("keywords have same keys")
-                keywords[var] = val
-
-        if IS(func, ClassValue):
-            constructor = func.getattr("__init__")
-            # bind self
-            inst = InstanceValue(func, func.env)
-            args = [inst] + args
-            return apply_closure(constructor, args, keywords)
-        elif IS(func, LambdaValue):
-            return apply_closure(func, args, keywords)
-        elif IS(func, FunValue):
-            return apply_closure(func, args, keywords)
-        elif IS(func, MethodValue):
-            # get the instance, exp.func must be a Attribute Node
-            inst = value_of_exp(exp.func.value, env)
-            args = [inst] + args
-            return apply_closure(func, args, keywords)
-        elif IS(func, InstanceValue):  # a instance has __call__ method
-            call = func.getattr("__call__")
-            if call is None:
-                fatal("this instance don't support call")
-            else:
-                args = [func] + args
-                return apply_closure(call, args, keywords)
-        elif IS(func, PrimFunValue):
-            return func.fun(*args)
-        else:
-            fatal("unkown function type")
-
-    elif IS(exp, ast.Repr):
-        pass
-    elif IS(exp, ast.Num):
-        if type(exp.n) == int:
-            return IntValue(exp.n)
-        elif type(exp.n) == float:
-            return floatValue(exp.n)
-        else:
-            fatal("unkown number value")
-    elif IS(exp, ast.Str):
-        return StrValue(exp.s)
-    elif IS(exp, ast.Attribute):
-        val = value_of_exp(exp.value, env)
-        if IS(val, ClassValue):
-            return val.getattr(exp.attr)
-        elif IS(val, InstanceValue):
-            return val.getattr(exp.attr)
-        else:
-            print "unkown attribute value."
-        # TODO:
-    elif IS(exp, ast.Subscript):
-        val = value_of_exp(exp.value, env)
-        if IS(exp.slice, ast.Index):
-            idx = value_of_exp(exp.slice.value, env)
-            if IS(val, SeqValue) or IS(val, DictValue):
-                return val.getitem(idx)
-            elif IS(val, InstanceValue):
-                getitem = val.getattr("__getitem__")
-                if getitem is None:
-                    fatal("this class don't support get slice")
-                else:
-                    args = [val] + args
-                    return apply_closure(getitem, args)
-        elif IS(exp.slice, ast.Slice):
-            lower = pyval_of_exp(exp.slice.lower, env)
-            upper = pyval_of_exp(exp.slice.upper, env)
-            step = pyval_of_exp(exp.slice.step, env)
-            if IS(val, ListValue) or IS(val, TupleValue):
-                val.getslice(lower, upper, step)
-            elif IS(val, InstanceValue):
-                getslice = val.getattr("__getslice__")
-                if getslice is None:
-                    fatal("this class don't support get slice")
-                else:
-                    args = [val] + args
-                    return apply_closure(getslice, args)
-
-        elif IS(exp.slice, ast.Ellipsis):
-            pass
-        else:
-            pass
-
-    elif IS(exp, ast.Name):
-        if interp.cur_mod.is_global(exp.id):
-            env1 = interp.cur_mod.env
-        else:
-            env1 = env
-        try:
-            val = env1.lookup(exp.id)
-            return val
-        except EnvLookupError, e:
-            fatal("value_of_exp", e.msg)
-
-    elif IS(exp, ast.List):
-        vals = map(lambda e: value_of_exp(e, env), exp.elts)
-        return ListValue(vals)
-    elif IS(exp, ast.Tuple):
-        vals = map(lambda e: value_of_exp(e, env), exp.elts)
-        return TupleValue(vals)
-    else:
-        print "unkown exp type(%s)." % str(exp)
-        raise
+        return ret
 
 
 def value_of_stmts(stmts, env):
@@ -374,8 +106,11 @@ def value_of_stmts(stmts, env):
         env.put(cls_name, cls_val)
         return value_of_stmts(rest_stmts, env)
     elif IS(stmt, ast.Return):
+        if not IS(env, LocalEnv):
+            fatal("SyntaxError: return is not in a function")
+
         if stmt.value is None:
-            return None
+            return none
         else:
             return value_of_exp(stmt.value, env)
     elif IS(stmt, ast.Assign):
@@ -474,9 +209,11 @@ def value_of_stmts(stmts, env):
     elif IS(stmt, ast.Exec):
         pass
     elif IS(stmt, ast.Global):
+        # every name which is declared as a global name will bind to "global"
+        # in local enviroment. so we must change the implemention of the
+        # bind function
         for name in stmt.names:
-            # global_names.add(name)
-            interp.cur_mod.add_global(name)
+            env.put_or_update(name, "global")
     elif IS(stmt, ast.Expr):
         val = value_of_exp(stmt.value, env)
         return value_of_stmts(rest_stmts, env)
@@ -489,37 +226,313 @@ def value_of_stmts(stmts, env):
     else:
         print "unkown statement type."
 
-module_env = None
-global_names = None
-
-def value_of_mod(fname, node):
-    global module_env, global_names
-    val = ModuleValue(fname, fname, built_in_env)
-    module_env = val.env
-    global_names = set()
-    if IS(node, ast.Module):
-        value_of_stmts(node.body, module_env)
-        return val
-    elif IS(node, ast.Interactive):
-        pass
-    elif IS(node, ast.Expression):
-        pass
-    else:
-        print "error: unkown MOD type."
-
-
-def eval_file(fname):
-    node = parse_file(fname)
-    val = value_of_mod(fname, node)
-    print "-------------final value----------------------"
-    print val
-    print "----------------------------------------------"
-
-
 def eval_string(s):
     node = parse_str(s)
-    return value_of_mod(node, init_env())
 
+
+class ExpEvaluator(object):
+    def __init__(self):
+        pass
+
+    def dispatch(self, exp, env):
+        "Dispatcher function, dispatching exp type T to method _T."
+        if not IS(exp, ast.expr):
+            fatal("not a expression node")
+        meth = getattr(self, "_"+exp.__class__.__name__)
+        return meth(exp, env)
+
+    def _BoolOp(self, exp, env):
+        """boolean expression"""
+        def value_and(*exps):
+            for exp in exps:
+                val = self.dispatch(exp, env)
+                if val.pybool() is False:
+                    return false
+            return true
+
+        def value_or(*exps):
+            for exp in exps:
+                val = self.dispatch(exp, env)
+                if val.pybool() is True:
+                    return false
+            return true
+
+        op = exp.op
+        if IS(op, ast.And):
+            return value_and(*exp.values)
+        elif IS(op, ast.Or):
+            return value_or(*exp.values)
+        else:
+            fatal("unkown bool operator")
+
+
+    def _BinOp(self, exp, env):
+        l_val = self.dispatch(exp.left, env)
+        r_val = self.dispatch(exp.right, env)
+        op = exp.op
+        if IS(op, ast.Add):
+            return l_val.add(r_val)
+        elif IS(op, ast.Sub):
+            return l_val.sub(r_val)
+        elif IS(op, ast.Mult):
+            return l_val.mul(r_val)
+        elif IS(op, ast.Div):
+            return l_val.div(r_val)
+        else:
+            fatal('unkown binary operator %s' % op)
+
+    def _UnaryOp(self, exp, env):
+        op = exp.op
+        rand = self.dispatch(exp.operand, env)
+        if IS(op, ast.Not):
+            return BoolValue(not rand.pybool())
+        elif IS(op, ast.Invert):
+            pass
+        elif IS(op, ast.UAdd):
+            pass
+        elif IS(op, ast.USub):
+            pass
+        else:
+            fatal("unkown UnaryOp type(%s)" % op)
+
+    def _Compare(self, exp, env):
+        def apply_a_comop(left, op, right):
+            rand1 = self.dispatch(left, env)
+            rand2 = self.dispatch(right, env)
+
+            if IS(op, ast.Eq):
+                return rand1.eq(rand2)
+            elif IS(op, ast.NotEq):
+                return rand1.neq(rand2)
+            elif IS(op, ast.Lt):
+                return rand1.lt(rand2)
+            elif IS(op, ast.LtE):
+                return rand1.lte(rand2)
+            elif IS(op, ast.Gt):
+                return rand1.gt(rand2)
+            elif IS(op, ast.GtE):
+                return rand1.gte(rand2)
+            # Not Implemented
+            elif IS(op, ast.Is):
+                return rand2.contains(rand1)
+            elif IS(op, ast.IsNot):
+                return rand1 is not rand2
+            elif IS(op, ast.In):
+                return rand1.contains(rand2)
+            elif IS(op, ast.NotIn):
+                ret = rand1.contains(rand2)
+                return BoolValue(not ret.pybool())
+        left = exp.left
+        ops = exp.ops
+        rest_rands = exp.comparators
+        for op, right in zip(ops, rest_rands):
+            ret = apply_a_comop(left, op, right)
+            if ret.pybool() is False:
+                return BoolValue(False)
+            left = right
+        return BoolValue(True)
+
+    def _Lambda(self, exp, env):
+        return LambdaValue(exp, env)
+
+    def _IfExp(self, exp, env):
+        t_val = self.dispatch(exp.test, env)
+        if t_val.pybool():
+            return self.dispatch(exp.body, env)
+        else:
+            return self.dispatch(exp.orelse, env)
+
+    def _Dict(self, exp, env):
+        keys = map(lambda e: self.dispatch(e, env), exp.keys)
+        values = map(lambda e: self.dispatch(e, env), exp.values)
+        return DictValue(zip(keys, values))
+
+    def _Set(self, exp, env):
+        elts = map(lambda e: self.dispatch(e, env), exp.elts)
+        return SetValue(elts)
+
+    def _List(self, exp, env):
+        vals = map(lambda e: self.dispatch(e, env), exp.elts)
+        return ListValue(vals)
+
+    def _Tuple(self, exp, env):
+        vals = map(lambda e: self.dispatch(e, env), exp.elts)
+        return TupleValue(vals)
+
+    def _Call(self, exp, env):
+        func = self.dispatch(exp.func, env)
+        args = map(lambda e: self.dispatch(e, env), exp.args)
+        keywords = {}
+        for var, val in exp.keywords:
+            keywords[var] = self.dispatch(val, env)
+        starargs = ListValue([])
+        if exp.starargs is not None:
+            starargs = self.dispatch(exp.starargs, env)
+        kwargs = DictValue({})
+        if exp.kwargs is not None:
+            kwargs = self.dispatch(exp.kwargs, env)
+
+        # merger positional arguments
+        if IS(starargs, ListValue) or IS(starargs, TupleValue) or\
+           IS(starargs, SetValue):
+            args += list(starargs.value)
+        else:
+            fatal("argument after * must be a sequence.")
+        # merger keyword arguments
+        if IS(kwargs, DictValue):
+            for var, val in kwargs.as_pyval():
+                if not IS(var, StrValue):
+                    fatal("not a name.")
+                var = var.value
+                if var in keywords:
+                    fatal("keywords have same keys")
+                keywords[var] = val
+        else:
+            fatal("argument after ** must be a dict.")
+
+        if IS(func, ClassValue):
+            constructor = func.getattr("__init__")
+            # bind self
+            inst = InstanceValue(func)
+            args = [inst] + args
+            apply_closure(constructor, args, keywords)
+            return inst         # we should return the instance
+        elif IS(func, LambdaValue):
+            return apply_closure(func, args, keywords)
+        elif IS(func, FunValue):
+            return apply_closure(func, args, keywords)
+        elif IS(func, MethodValue):
+            # get the instance, exp.func must be a Attribute Node
+            if not IS(exp.func, ast.Attribute):
+                fatal("Not a attribute node.")
+            inst = self.dispatch(exp.func.value, env)
+            args = [inst] + args
+            return apply_closure(func, args, keywords)
+        elif IS(func, InstanceValue):  # a instance has __call__ method
+            call = func.getattr("__call__")
+            if call is None:
+                fatal("this instance don't support call")
+            else:
+                args = [func] + args
+                return apply_closure(call, args, keywords)
+        elif IS(func, PrimFunValue):
+            return func.fun(*args)
+        else:
+            fatal("unkown function type")
+
+    def _Num(self, exp, env):
+        if type(exp.n) == int:
+            return IntValue(exp.n)
+        elif type(exp.n) == float:
+            return floatValue(exp.n)
+        else:
+            fatal("unkown number value")
+
+    def _Str(self, exp, env):
+        return StrValue(exp.s)
+
+    def _Attribute(self, exp, env):
+        val = self.dispatch(exp.value, env)
+        if IS(val, ClassValue) or IS(val, InstanceValue) or \
+           IS(val, ModuleValue):
+            return val.getattr(exp.attr)
+        else:
+            fatal("unkown attribute value.")
+
+    def _Subscript(self, exp, env):
+        # TODO: better implemention
+        val = self.dispatch(exp.value, env)
+        if IS(exp.slice, ast.Index):
+            idx = self.dispatch(exp.slice.value, env)
+            if IS(val, SeqValue) or IS(val, DictValue):
+                return val.getitem(idx)
+            elif IS(val, InstanceValue):
+                getitem = val.getattr("__getitem__")
+                if getitem is None:
+                    fatal("this class don't support get slice")
+                else:
+                    args = [val, idx]
+                    return apply_closure(getitem, args)
+        elif IS(exp.slice, ast.Slice):
+            lower = self.dispatch(exp.slice.lower, env)
+            upper = self.dispatch(exp.slice.upper, env)
+            step = self.dispatch(exp.slice.step, env)
+            if IS(val, ListValue) or IS(val, TupleValue):
+                val.getslice(lower, upper, step)
+            elif IS(val, InstanceValue):
+                getslice = val.getattr("__getslice__")
+                if getslice is None:
+                    fatal("this class don't support get slice")
+                else:
+                    args = [val] + args
+                    return apply_closure(getslice, args)
+
+        elif IS(exp.slice, ast.Ellipsis):
+            pass
+        else:
+            pass
+
+    def _Name(self, exp, env):
+        try:
+            val = env.lookup(exp.id)
+            if val == "global":    # a global value
+                env1 = env.find_global_env()
+                return env1.lookup(exp.id)
+            else:
+                return val
+        except EnvLookupError, e:
+            fatal(e.msg)
+
+
+    def _ListComp(self, exp, env):
+        pass
+
+    def _SetComp(self, exp, env):
+        pass
+
+    def _DictComp(self, exp, env):
+        pass
+
+    def _GeneratorExp(self, exp, env):
+        pass
+
+    def _Yield(self, exp, env):
+        pass
+
+g_exp = ExpEvaluator()
+
+def value_of_exp(exp, env):
+    return g_exp.dispatch(exp, env)
+
+class BlockEvaluator(object):
+    def __init__(self):
+        pass
+
+    def eval(self, stmts, env):
+        if stmts == []:
+            return cont
+        stmt = stmts[0]
+        rest_stmts = stmts[1:]
+        ret = self.dispatch(stmt, env)
+        if ret == "cont":
+            return self.eval(rest_stmts)
+        else:
+            return ret
+
+    def dispatch(self, stmt, env):
+        "Dispatcher function, dispatching exp type T to method _T."
+        if not IS(exp, ast.stmt):
+            fatal("not a statement node")
+        meth = getattr(self, "_"+stmt.__class__.__name__)
+        return meth(stmt, env)
+
+    def _FunctionDef(self, stmt, env):
+        if IS(env, ClassEnv):   # a class method
+            clo = MethodValue(stmt, env)
+        else:                   # a normal function
+            clo = FunValue(stmt, env)
+        env.put(stmt.name, clo)
+        return value_of_stmts(rest_stmts, env)
 
 class Interpreter(object):
     def __init__(self):
@@ -606,7 +619,6 @@ class Interpreter(object):
 interp = Interpreter()
 
 if __name__ == '__main__':
-    # eval_file("test/1.py")
-    # eval_file("test/2.py")
-    interp.start("test/2.py")
-    # interp.start("test/1.py")
+    # interp.start("test/oop.py")
+    # interp.start("test/2.py")
+    interp.start("test/1.py")

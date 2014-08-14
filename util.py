@@ -7,7 +7,7 @@ utilities
 import sys
 import ast
 
-__all__ = ["parse_file", "parse_str", "IS", "fatal", "get_id", "dict_sub"]
+__all__ = ["parse_file", "parse_str", "IS", "fatal", "get_id", "dict_sub", "partial_zip"]
 
 def parse_file(name):
     try:
@@ -19,9 +19,13 @@ def parse_file(name):
 parse_str = ast.parse
 IS = isinstance
 
+DEBUG = True
+
 def fatal(who, *msg):
     output = who + ": " + ' '.join(map(str, msg))
     print output
+    if DEBUG:
+        raise
     sys.exit(-1)
 
 def foldl(f, x, *lsts):
@@ -43,3 +47,16 @@ def dict_sub(d1, d2):
         if k not in d2:
             ret[k] = v
     return ret
+
+
+def partial_zip(a1, a2):
+    """
+    return a triple
+    """
+    rest_a1 = []
+    rest_a2 = []
+    if len(a1) > len(a2):
+        rest_a1 = a1[len(a2):]
+    if len(a1) < len(a2):
+        rest_a2 = a2[len(a1):]
+    return (zip(a1, a2), rest_a1, rest_a2)

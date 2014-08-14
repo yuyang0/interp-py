@@ -5,6 +5,7 @@
 enviroments
 """
 import copy
+from util import IS
 
 class EnvError(Exception):
     pass
@@ -31,6 +32,16 @@ class Env(object):
         self.table = copy.deepcopy(table)  # deepcopy is very important
 
     def lookup(self, var):
+        """
+        fetch the value binded with var, we only search the LocalEnv and
+        ModuleEnv so ClassEnv and InstanceEnv must be ignored.
+        """
+        if IS(self, ClassEnv) or IS(self, InstanceEnv):
+            if self.parent is None:
+                raise EnvLookupError("%s is not bound" % var)
+            else:
+                return self.parent.lookup(var)
+
         val = self.table.get(var, None)
         if val is None:
             if self.parent is None:
@@ -66,6 +77,14 @@ class Env(object):
         else:
             return self
 
+    def find_global_env(self):
+        if IS(self, ModuleEnv):
+            return self
+        elif self.parent is None:
+            return None
+        else:
+            return self.parent.find_global_env()
+
     def merger_env(self, other):
         for var, val in other.table.items():
             self.table[var] = val
@@ -75,6 +94,10 @@ class Env(object):
 
     def __str__(self):
         return str(self.table) + "~-> " + str(self.parent)
+
+class LocalEnv(Env):
+    def __init__(self, parent=None, table={}):
+        super(LocalEnv, self).__init__(parent, table)
 
 class ModuleEnv(Env):
     def __init__(self, parent=None, table={}):
