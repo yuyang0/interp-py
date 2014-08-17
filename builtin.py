@@ -11,17 +11,16 @@ dir(__builtin__)
 from environment import Env
 from values import *
 from util import *
-# from values import (PrimFunValue, BoolValue, NoneValue,
-#                     ClassValue)
 
-def int_fun(x, base=10):
+
+def int_fun(x, base=IntValue(10)):
     if isinstance(x, StrValue) or isinstance(x, NumValue):
-        return IntValue(int(x.value, base))
+        return IntValue(int(x.value, base.value))
     else:
         fatal("TypeError: int() argument must be a string or a number.")
 
-def bool_fun(x=False):
-    return BoolValue(bool(x))
+def bool_fun(x=false):
+    return x.bool()
 
 def str_fun(obj=""):
     return StrValue(str(obj))
@@ -50,7 +49,7 @@ def dict_fun(iterable=None, **kwarg):
     else:
         return DictValue(dict(iterable, **kwarg))
 
-built_in_env = Env(None, {
+built_in_env = GlobalEnv(None, {
     "abs"              : PrimFunValue(abs),
     "all"              : PrimFunValue(all),
     "any"              : PrimFunValue(any),
@@ -132,9 +131,9 @@ built_in_env = Env(None, {
     "zip"              : PrimFunValue(zip),
 
     # keywords
-    "True"             : BoolValue(True),
-    "False"            : BoolValue(False),
-    "None"             : NoneValue(),
+    "True"             : true,
+    "False"            : false,
+    "None"             : none,
     # classes
     "object"           : ClassValue("object")
 })

@@ -169,10 +169,20 @@ class SeqValue(Value):
             fatal("TypeError, index of sequence must be a integer.")
         return self.value[idx.value]
 
-    def getslice(self, lower=0, upper=None, step=1):
-        if upper is None:
-            upper = len(self.value)+1
-        ret = self.value[lower:upper:step]
+    def getslice(self, lower, upper, step):
+        if IS(lower, NoneValue):
+            py_lower = 0
+        else:
+            py_lower = lower.value
+        if IS(upper, NoneValue):
+            py_upper = len(self.value)+1
+        else:
+            py_upper = upper.value
+        if IS(step, NoneValue):
+            py_step = 1
+        else:
+            py_step = step.value
+        ret = self.value[py_lower:py_upper:py_step]
         return self.__class__(ret)
 
     def contains(self, obj):
@@ -232,7 +242,17 @@ class ListValue(SeqValue):
         self.value[idx.pyval()] = val
 
     def setslice(self, lower, upper, val):
-        pass
+        # TODO
+        if IS(lower, NoneValue):
+            py_lower = 0
+        else:
+            py_lower = lower.value
+
+        if IS(upper, NoneValue):
+            py_upper = 0
+        else:
+            py_upper = upper.value
+        self.value[py_lower:py_upper] = val
 
     def __str__(self):
         ss = ' '.join(map(str, self.value))
@@ -317,7 +337,7 @@ class ClosureValue(Value):
         self.default_map = {}
         default_params = self.posargs[len(self.posargs) - len(self.defaults):]
 
-        from interp import value_of_exp
+        from interpreter import value_of_exp
         for var, exp in zip(default_params, self.defaults):
             self.default_map[var] = value_of_exp(exp, env)
         self.body = func.body
@@ -325,6 +345,8 @@ class ClosureValue(Value):
     def bind_args(self, posargs, keywords):
         """
         bind the argument and return a new environment
+        posargs: a python list contains positional arguments
+        keywords: a python dict contains keywords arguments
         """
         new_env = LocalEnv(self.env)
         # bind positional arguments
@@ -360,6 +382,19 @@ class ClosureValue(Value):
                 fatal("A parameter(%s) left unbound." % param)
         return new_env
 
+    def apply(self, posargs, keywords=None):
+        if keywords is None:
+            keywords = {}
+        new_env = self.bind_args(posargs, keywords)
+        # avoid import cycle, actually, this will produce some trick problem, so
+        # we need a better implemention
+        from interpreter import value_of_stmts
+        ret = value_of_stmts(self.body, new_env)
+        if ret == "no-return":
+            return none
+        else:
+            return ret
+
     def as_pyval(self):
         fatal("can't call as_pyval on closure value")
 
@@ -387,6 +422,9 @@ class PrimFunValue(ClosureValue):
     def __init__(self, fun):
         self.fun = fun
 
+    def apply(self, args, keywords):
+        return self.fun(*args)
+
 ######################################################################
 #          module value
 ######################################################################
@@ -400,7 +438,7 @@ class ModuleValue(Value):
                     __name__ attribute, otherwise it's the package
     """
     def __init__(self, fname, name, p_env):
-        self.fname = name
+        self.fname = fname
         self.name = name
         if IS(self, PackageValue):
             self.package = self.name
@@ -414,12 +452,15 @@ class ModuleValue(Value):
         self.env.put("__doc__", None)
         self.env.put("__package__", self.package)
 
+    def set_doc(self, doc_s):
+        self.env.put_or_update("__doc__", doc_s)
+
     def as_pyval(self):
         fatal("can't call as_pyval on module value")
 
     def getattr(self, name):
         """
-
+        get attribute
         """
         val = self.env.lookup_local(name)
         return val
@@ -479,6 +520,10 @@ class ClassValue(Value):
 
     def __str__(self):
         return "Class: %s" % self.name
+
+    def set_doc(self, doc_s):
+        self.env.put_or_update("__doc__", doc_s)
+
     def pybool(self):
         return True
 
@@ -498,6 +543,9 @@ class ClassValue(Value):
         else:
             return val
 
+    def set_env(self, env):
+        self.env = env
+
 ######################################################################
 #          instance value
 ######################################################################
@@ -515,8 +563,7 @@ class InstanceValue(Value):
         if hash_spec is None:
             fatal("TypeError: unhashable type")
         else:
-            from interp import apply_closure
-            return apply_closure(hash_spec, [self])
+            return hash_spec.apply([self])
 
     def __str__(self):
         return "<instance of %s>" % str(self.cls)
@@ -526,10 +573,7 @@ class InstanceValue(Value):
         if nonzero is None:
             return True
         else:
-            # in order to avoid import cycle, we must import function
-            # in this place
-            from interp import apply_closure
-            return apply_closure(nonzero, [self])
+            return nonzero.apply([self])
 
     def pycmp(self, obj):
         pass
@@ -541,45 +585,40 @@ class InstanceValue(Value):
         else:
             return val
 
-    def contains(self, obj):    # TODO:
+    def contains(self, obj):
         contains = self.getattr("__contains__")
         if contains is None:
             return false
         else:
-            from interp import apply_closure
-            return apply_closure(contains, [self, obj])
+            return contains.apply([self, obj])
 
     def add(self, obj):
-        add_spe = self.getattr("__add__")
-        if add_spe is None:
+        add_spec = self.getattr("__add__")
+        if add_spec is None:
             fatal("TypeError: unsupported operand type(s) for +")
         else:
-            from interp import apply_closure
-            return apply_closure(add_spe, [self, obj])
+            return add_spec.apply([self, obj])
 
     def sub(self, obj):
-        sub_spe = self.getattr("__sub__")
-        if sub_spe is None:
+        sub_spec = self.getattr("__sub__")
+        if sub_spec is None:
             fatal("TypeError: unsupported operand type(s) for +")
         else:
-            from interp import apply_closure
-            return apply_closure(sub_spe, [self, obj])
+            return sub_spec.apply([self, obj])
 
     def mul(self, obj):
-        mul_spe = self.getattr("__mul__")
-        if mul_spe is None:
+        mul_spec = self.getattr("__mul__")
+        if mul_spec is None:
             fatal("TypeError: unsupported operand type(s) for *")
         else:
-            from interp import apply_closure
-            return apply_closure(mul_spe, [self, obj])
+            return mul_spec.apply([self, obj])
 
     def div(self, obj):
-        div_spe = self.getattr("__div__")
-        if div_spe is None:
+        div_spec = self.getattr("__div__")
+        if div_spec is None:
             fatal("TypeError: unsupported operand type(s) for /")
         else:
-            from interp import apply_closure
-            return apply_closure(div_spe, [self, obj])
+            return div_spec.apply([self, obj])
 
 ######################################################################
 #          file value

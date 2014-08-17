@@ -11,12 +11,8 @@ import os.path
 from util import *
 from environment import *
 from values import *
-from buildin import built_in_env
+from builtin import built_in_env
 
-class Cont(object):
-    pass
-cont = Cont()
-call_stk = []
 
 def bind(target, val, env):
     if IS(target, ast.Name) or IS(target, str):
@@ -44,7 +40,11 @@ def bind(target, val, env):
     elif IS(target, ast.Subscript):
         tgt = value_of_exp(target.value, env)
         if IS(tgt, ListValue):
-            pass
+            if IS(target.slice, ast.Index):
+                idx = value_of_exp(target.slice.value)
+                tgt.setitem(idx, val)
+            elif IS(target.slice, ast.Slice):
+                pass
         elif IS(tgt, DictValue):
             if IS(target.slice, ast.Index):
                 idx = value_of_exp(target.slice.value)
@@ -58,186 +58,36 @@ def bind(target, val, env):
     elif IS(target, ast.Attribute):
         tgt = value_of_exp(target.value, env)
         if IS(tgt, InstanceValue):
-            tat.env.put_or_update(target.attr, val)
+            tgt.env.put_or_update(target.attr, val)
         elif IS(tgt, ClassValue):
-            tat.env.put_or_update(target.attr, val)
+            tgt.env.put_or_update(target.attr, val)
         else:
             fatal("TypeError: assign to an attribute exp")
     else:
         raise EnvBindError("error type arguments.")
 
-def apply_closure(clo, posargs, keywords=None,):
+def apply_closure(clo, posargs, keywords=None):
     new_env = clo.bind_args(posargs, keywords)
     # TODO: maybe need to creat a new enviroment
     # new_env = Env(new_env)
     ret = value_of_stmts(clo.body, new_env)
-    if ret == cont:
+    if ret == "no-return":
         return none
     else:
         return ret
 
 
-def value_of_stmts(stmts, env):
-    if stmts == []:
-        return cont  # return without find a return statement
-    stmt = stmts[0]
-    rest_stmts = stmts[1:]
-
-    if IS(stmt, ast.FunctionDef):
-        if IS(env, ClassEnv):   # a class method
-            clo = MethodValue(stmt, env)
-        else:                   # a normal function
-            clo = FunValue(stmt, env)
-        env.put(stmt.name, clo)
-        return value_of_stmts(rest_stmts, env)
-    elif IS(stmt, ast.ClassDef):  # OOP
-        cls_name = stmt.name
-        cls_bases = map(lambda e: value_of_exp(e, env), stmt.bases)
-        body = stmt.body
-        cls_val = ClassValue(cls_name, cls_bases)
-        # evalute the body of class
-        # first bind the class name
-
-        new_env = ClassEnv(env)
-        new_env.put(cls_name, cls_val)
-        val = value_of_stmts(body, new_env)
-        cls_val.env.set_table(new_env.table)
-
-        env.put(cls_name, cls_val)
-        return value_of_stmts(rest_stmts, env)
-    elif IS(stmt, ast.Return):
-        if not IS(env, LocalEnv):
-            fatal("SyntaxError: return is not in a function")
-
-        if stmt.value is None:
-            return none
-        else:
-            return value_of_exp(stmt.value, env)
-    elif IS(stmt, ast.Assign):
-        for e in stmt.targets:
-            val = value_of_exp(stmt.value, env)
-            bind(e, val, env)
-        return value_of_stmts(rest_stmts, env)
-    elif IS(stmt, ast.AugAssign):   # a = a op b
-        pass
-
-    elif IS(stmt, ast.Print):
-        val_lst = map(lambda e: value_of_exp(e, env), stmt.values)
-        if stmt.dest:
-            dest = value_of_exp(stmt.dest, env)
-            print dest % tuple(val_lst)
-            return value_of_stmts(rest_stmts, env)
-        else:
-            for val in val_lst:
-                print val,
-            print               # newline
-            return value_of_stmts(rest_stmts, env)
-    elif IS(stmt, ast.For):
-        pass
-    elif IS(stmt, ast.While):
-        t_val = value_of_exp(stmt.test, env)
-        while t_val.pybool():
-            val = value_of_stmts(stmt.body, env)
-            if val == "break":
-                return value_of_stmts(rest_stmts, env)
-            elif val == "continue" or val == cont:
-                t_val = value_of_exp(stmt.test, env)
-            else:               # find a return statement.
-                return val
-        # when the loop exits normally, we need run the else block
-        if stmt.orelse is None:
-            return value_of_stmts(rest_stmts, env)
-        else:
-            val = value_of_stmts(stmt.orelse, env)
-            if val == cont:
-                return value_of_stmts(rest_stmts, env)
-            else:                   # find a return statement
-                return val
-
-    elif IS(stmt, ast.If):
-        t_val = value_of_exp(stmt.test, env)
-        if t_val.pybool():
-            val = value_of_stmts(stmt.body, env)
-        else:
-            val = value_of_stmts(stmt.orelse, env)
-        if val == cont:  # without return statement
-            return value_of_stmts(rest_stmts, env)
-        else:            # find a return statement, just return the value
-            return val   # and ignore the rest statements
-    elif IS(stmt, ast.With):
-        pass
-    elif IS(stmt, ast.Raise):
-        pass
-    elif IS(stmt, ast.TryExcept):
-        pass
-    elif IS(stmt, ast.TryFinally):
-        pass
-    elif IS(stmt, ast.Assert):
-        pass
-    elif IS(stmt, ast.Import):
-        for a in stmt.names:
-            mod = interp.load_module(a.name)
-            if a.asname is not None:
-                env.put_or_update(a.asname, mod)
-            else:
-                # get the first segement of module name
-                local_name = a.name.partition(".")[0]
-                env.put_or_update(local_name, mod)
-    # level: 0 is absolute import, 1 is current directory,
-    # 2 is parent directory
-    elif IS(stmt, ast.ImportFrom):
-        mod = interp.load_module(stmt.module, stmt.level)
-        if IS(mod, PackageValue):     # a package
-            for a in stmt.names:
-                val = mod.getattr(a.name)
-                if val is None:
-                    pass
-
-                if a.asname is None:
-                    env.put_or_update(a.name, val)
-                else:
-                    env.put_or_update(a.asname, val)
-        else:                   # a regular moudle
-            for a in stmt.names:
-                val = mod.getattr(a.name)
-                if val is None:
-                    fatal("this module don't have the attribute")
-                if a.asname is None:
-                    env.put_or_update(a.name, val)
-                else:
-                    env.put_or_update(a.asname, val)
-    elif IS(stmt, ast.Exec):
-        pass
-    elif IS(stmt, ast.Global):
-        # every name which is declared as a global name will bind to "global"
-        # in local enviroment. so we must change the implemention of the
-        # bind function
-        for name in stmt.names:
-            env.put_or_update(name, "global")
-    elif IS(stmt, ast.Expr):
-        val = value_of_exp(stmt.value, env)
-        return value_of_stmts(rest_stmts, env)
-    elif IS(stmt, ast.Break):
-        return "break"
-    elif IS(stmt, ast.Continue):
-        return "continue"
-    elif IS(stmt, ast.Pass):
-        return value_of_stmts(rest_stmts, env)
-    else:
-        print "unkown statement type."
-
-def eval_string(s):
-    node = parse_str(s)
-
-
 class ExpEvaluator(object):
+    """
+    evaluator of expression
+    """
     def __init__(self):
         pass
 
     def dispatch(self, exp, env):
         "Dispatcher function, dispatching exp type T to method _T."
         if not IS(exp, ast.expr):
-            fatal("not a expression node")
+            fatal("%s not a expression node" % exp)
         meth = getattr(self, "_"+exp.__class__.__name__)
         return meth(exp, env)
 
@@ -264,7 +114,6 @@ class ExpEvaluator(object):
             return value_or(*exp.values)
         else:
             fatal("unkown bool operator")
-
 
     def _BinOp(self, exp, env):
         l_val = self.dispatch(exp.left, env)
@@ -360,6 +209,8 @@ class ExpEvaluator(object):
         return TupleValue(vals)
 
     def _Call(self, exp, env):
+        call_stk.append_cur_node()
+
         func = self.dispatch(exp.func, env)
         args = map(lambda e: self.dispatch(e, env), exp.args)
         keywords = {}
@@ -395,30 +246,32 @@ class ExpEvaluator(object):
             # bind self
             inst = InstanceValue(func)
             args = [inst] + args
-            apply_closure(constructor, args, keywords)
-            return inst         # we should return the instance
+            constructor.apply(args, keywords)
+            ret = inst         # we should return the instance
         elif IS(func, LambdaValue):
-            return apply_closure(func, args, keywords)
+            ret = func.apply(args, keywords)
         elif IS(func, FunValue):
-            return apply_closure(func, args, keywords)
+            ret = func.apply(args, keywords)
         elif IS(func, MethodValue):
             # get the instance, exp.func must be a Attribute Node
             if not IS(exp.func, ast.Attribute):
                 fatal("Not a attribute node.")
             inst = self.dispatch(exp.func.value, env)
             args = [inst] + args
-            return apply_closure(func, args, keywords)
+            ret = func.apply(args, keywords)
         elif IS(func, InstanceValue):  # a instance has __call__ method
             call = func.getattr("__call__")
             if call is None:
                 fatal("this instance don't support call")
             else:
                 args = [func] + args
-                return apply_closure(call, args, keywords)
+                ret = call.apply(args, keywords)
         elif IS(func, PrimFunValue):
-            return func.fun(*args)
+            ret = func.apply(args, keywords)
         else:
             fatal("unkown function type")
+        call_stk.pop()
+        return ret
 
     def _Num(self, exp, env):
         if type(exp.n) == int:
@@ -449,23 +302,32 @@ class ExpEvaluator(object):
             elif IS(val, InstanceValue):
                 getitem = val.getattr("__getitem__")
                 if getitem is None:
-                    fatal("this class don't support get slice")
+                    fatal("this instance don't support get item.")
                 else:
                     args = [val, idx]
-                    return apply_closure(getitem, args)
+                    return getitem.apply(args)
         elif IS(exp.slice, ast.Slice):
-            lower = self.dispatch(exp.slice.lower, env)
-            upper = self.dispatch(exp.slice.upper, env)
-            step = self.dispatch(exp.slice.step, env)
+            if exp.slice.lower is None:
+                lower = none
+            else:
+                lower = self.dispatch(exp.slice.lower, env)
+            if exp.slice.upper is None:
+                upper = none
+            else:
+                upper = self.dispatch(exp.slice.upper, env)
+            if exp.slice.step is None:
+                step = none
+            else:
+                step = self.dispatch(exp.slice.step, env)
             if IS(val, ListValue) or IS(val, TupleValue):
-                val.getslice(lower, upper, step)
+                return val.getslice(lower, upper, step)
             elif IS(val, InstanceValue):
                 getslice = val.getattr("__getslice__")
                 if getslice is None:
                     fatal("this class don't support get slice")
                 else:
-                    args = [val] + args
-                    return apply_closure(getslice, args)
+                    args = [val, upper, lower, step]
+                    return getslice.apply(args)
 
         elif IS(exp.slice, ast.Ellipsis):
             pass
@@ -499,29 +361,44 @@ class ExpEvaluator(object):
     def _Yield(self, exp, env):
         pass
 
-g_exp = ExpEvaluator()
-
-def value_of_exp(exp, env):
-    return g_exp.dispatch(exp, env)
 
 class BlockEvaluator(object):
+    """
+    evaluator of statements:
+    self.eval evaluates all the statements in a block, it will rerurn the
+              following values:
+              1. no-return: this block doesn't contain return statement
+              2. break: find a break statement
+              3. continue: find a continue statement
+              4. a Value instance: find a return statement
+    self.dispatch evaluates only one statement, it will return following
+              values:
+              1. cont: continue evaluate the rest statements
+              2. a Value instance: means current statement is a return
+                 tatement
+    """
     def __init__(self):
         pass
 
     def eval(self, stmts, env):
-        if stmts == []:
-            return cont
-        stmt = stmts[0]
-        rest_stmts = stmts[1:]
-        ret = self.dispatch(stmt, env)
-        if ret == "cont":
-            return self.eval(rest_stmts)
-        else:
-            return ret
+        for stmt in stmts:
+            # print interp.cur_mod
+            # print interp
+            call_stk.set_cur_node(stmt, interp.cur_mod.fname)
+
+            ret = self.dispatch(stmt, env)
+            if ret == "cont":
+                continue
+            elif IS(ret, Value):
+                return ret
+            else:
+                return ret
+
+        return "no-return"
 
     def dispatch(self, stmt, env):
-        "Dispatcher function, dispatching exp type T to method _T."
-        if not IS(exp, ast.stmt):
+        "Dispatcher function, dispatching statement type T to method _T."
+        if not IS(stmt, ast.stmt):
             fatal("not a statement node")
         meth = getattr(self, "_"+stmt.__class__.__name__)
         return meth(stmt, env)
@@ -532,7 +409,212 @@ class BlockEvaluator(object):
         else:                   # a normal function
             clo = FunValue(stmt, env)
         env.put(stmt.name, clo)
-        return value_of_stmts(rest_stmts, env)
+        return "cont"
+
+    def _ClassDef(self, stmt, env):
+        cls_name = stmt.name
+        cls_bases = map(lambda e: value_of_exp(e, env), stmt.bases)
+        body = stmt.body
+        cls_val = ClassValue(cls_name, cls_bases)
+        # create new enviroment and evaluate the class body.
+        new_env = ClassEnv(env)
+        # set the __doc__ attribute
+        doc_val = ast.get_docstring(stmt)
+        if doc_val is None:
+            doc_val = none
+        else:
+            doc_val = StrValue(doc_val)
+        cls_val.set_doc(doc_val)
+
+        self.eval(body, new_env)
+        cls_val.set_env(new_env)
+
+        env.put(cls_name, cls_val)
+        return "cont"
+
+    def _Return(self, stmt, env):
+        if not IS(env, LocalEnv):
+            fatal("SyntaxError: return is not in a function")
+
+        if stmt.value is None:
+            return none
+        else:
+            return value_of_exp(stmt.value, env)
+
+    def _Assign(self, stmt, env):
+        for e in stmt.targets:
+            val = value_of_exp(stmt.value, env)
+            bind(e, val, env)
+        return "cont"
+
+    def _AugAssign(self, stmt, env):   # a = a op b
+        # first create a BinOp node for 'a op b'
+        node = ast.BinOp(stmt.target, stmt.op, stmt.value)
+        val = value_of_exp(node, env)
+        bind(stmt.target, val, env)
+        return "cont"
+
+    def _Print(self, stmt, env):
+        val_lst = map(lambda e: value_of_exp(e, env), stmt.values)
+        if stmt.dest:
+            dest = value_of_exp(stmt.dest, env)
+            print dest % tuple(val_lst)
+        else:
+            for val in val_lst:
+                print val,
+            print               # newline
+        return "cont"
+
+    def _For(self, stmt, env):
+        #TODO: navie implemention
+        obj = value_of_exp(stmt.iter, env)
+        if IS(obj, SeqValue) or IS(obj, DictValue) or IS(obj, SetValue):
+            for val in obj.value:
+                bind(stmt.target, val, env)
+                ret = self.eval(stmt.body, env)
+                if ret == "break":
+                    return "cont"
+                elif ret == "continue" or ret == "no-return":
+                    continue
+                else:
+                    return ret
+
+            if stmt.orelse is None:
+                return "cont"
+            else:
+                val = self.eval(stmt.orelse, env)
+                if val == "no-return":
+                    return "cont"
+                else:                   # find a return statement
+                    return val
+
+    def _While(self, stmt, env):
+        t_val = value_of_exp(stmt.test, env)
+        while t_val.pybool():
+            val = self.eval(stmt.body, env)
+            if val == "break":
+                return "cont"
+            elif val == "continue" or val == "no-return":
+                t_val = value_of_exp(stmt.test, env)
+            else:               # find a return statement.
+                return val
+        # when the loop exits normally, we need run the else block
+        if stmt.orelse is None:
+            return "cont"
+        else:
+            val = self.eval(stmt.orelse, env)
+            if val == "no-return":
+                return "cont"
+            else:                   # find a return statement
+                return val
+
+    def _If(self, stmt, env):
+        t_val = value_of_exp(stmt.test, env)
+        if t_val.pybool():
+            val = self.eval(stmt.body, env)
+        else:
+            val = self.eval(stmt.orelse, env)
+        if val == "no-return":  # without return statement
+            return "cont"
+        else:            # find a return statement, just return the value
+            return val   # and ignore the rest statements
+
+    def _Assert(self, stmt, env):
+        val = value_of_exp(stmt.test, env)
+        if val.pybool() is True:
+            return "cont"
+        else:
+            if stmt.msg is None:
+                msg = ""
+            else:
+                msg = value_of_exp(stmt.msg, env)
+            fatal("AssertionError: %s" % msg)
+
+    def _Import(self, stmt, env):
+        for a in stmt.names:
+            mod = interp.load_module(a.name)
+            if a.asname is not None:
+                env.put_or_update(a.asname, mod)
+            else:
+                # get the first segement of module name
+                local_name = a.name.partition(".")[0]
+                env.put_or_update(local_name, mod)
+        return "cont"
+
+    def _ImportFrom(self, stmt, env):
+        """
+        evaluate the statement like 'from XXX import YYY'
+
+        level: 0 is absolute import, 1 is current directory,
+               2 is parent directory
+        """
+        mod = interp.load_module(stmt.module, stmt.level)
+        if IS(mod, PackageValue):     # a package
+            for a in stmt.names:      # from XXX import *
+                if a == "*":
+                    mod.import_all(env)
+                    break
+
+                val = mod.getattr(a.name)
+                if val is None:
+                    fatal("module doesn't have attribute %s." % a.name)
+
+                if a.asname is None:
+                    env.put_or_update(a.name, val)
+                else:
+                    env.put_or_update(a.asname, val)
+        else:                   # a regular moudle
+            for a in stmt.names:
+                if a == "*":
+                    mod.import_all(env)
+                    break
+
+                val = mod.getattr(a.name)
+                if val is None:
+                    fatal("this module don't have the attribute")
+                if a.asname is None:
+                    env.put_or_update(a.name, val)
+                else:
+                    env.put_or_update(a.asname, val)
+        return "cont"
+
+    def _Global(self, stmt, env):
+        # every name which is declared as a global name will bind to "global"
+        # in local enviroment. so we must change the implemention of the
+        # bind function
+        for name in stmt.names:
+            env.put_or_update(name, "global")
+        return "cont"
+
+    def _Expr(self, stmt, env):
+        value_of_exp(stmt.value, env)
+        return "cont"
+
+    def _Break(self, stmt, env):
+        return "break"
+
+    def _Continue(self, stmt, env):
+        return "continue"
+
+    def _Pass(self, stmt, env):
+        return "cont"
+
+    # need to be implemented
+    def _Exec(self, stmt, env):
+        pass
+
+    def _With(self, stmt, env):
+        pass
+
+    def _Raise(self, stmt, env):
+        pass
+
+    def _TryExcept(self, stmt, env):
+        pass
+
+    def _TryFinally(self, stmt, env):
+        pass
+
 
 class Interpreter(object):
     def __init__(self):
@@ -546,6 +628,7 @@ class Interpreter(object):
         """
         the entry point of the interpreter
         """
+        fname = os.path.abspath(fname)
         node = parse_file(fname)
         val = ModuleValue(fname, "__main__", built_in_env)
         self.cur_mod = val
@@ -616,9 +699,22 @@ class Interpreter(object):
             prev = mod_val
         return prev
 
+
+###############################################################
+# global instances and functions
+###############################################################
+g_exp = ExpEvaluator()
+
+def value_of_exp(exp, env):
+    return g_exp.dispatch(exp, env)
+
+g_stmts = BlockEvaluator()
+def value_of_stmts(stmts, env):
+    return g_stmts.eval(stmts, env)
+
 interp = Interpreter()
 
 if __name__ == '__main__':
     # interp.start("test/oop.py")
-    # interp.start("test/2.py")
-    interp.start("test/1.py")
+    interp.start("test/2.py")
+    # interp.start("test/1.py")

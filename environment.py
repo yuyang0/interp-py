@@ -33,19 +33,19 @@ class Env(object):
 
     def lookup(self, var):
         """
-        fetch the value binded with var, we only search the LocalEnv and
-        ModuleEnv so ClassEnv and InstanceEnv must be ignored.
+        fetch the value binded with var, we only search the LocalEnv,
+        ModuleEnv, GlobalEnv. so ClassEnv and InstanceEnv must be ignored.
         """
         if IS(self, ClassEnv) or IS(self, InstanceEnv):
             if self.parent is None:
-                raise EnvLookupError("%s is not bound" % var)
+                raise EnvLookupError("NameError: name %s is not defined" % var)
             else:
                 return self.parent.lookup(var)
 
         val = self.table.get(var, None)
         if val is None:
             if self.parent is None:
-                raise EnvLookupError("%s is not bound" % var)
+                raise EnvLookupError("NameError: name %s is not bound" % var)
             else:
                 return self.parent.lookup(var)
         else:
@@ -95,22 +95,42 @@ class Env(object):
     def __str__(self):
         return str(self.table) + "~-> " + str(self.parent)
 
+class GlobalEnv(Env):
+    """
+    enviroment for built-in functions, exceptions etc
+    """
+    def __init__(self, parent=None, table={}):
+        super(GlobalEnv, self).__init__(parent, table)
+
+
 class LocalEnv(Env):
+    """
+    environment created by functions.
+    """
     def __init__(self, parent=None, table={}):
         super(LocalEnv, self).__init__(parent, table)
 
+
 class ModuleEnv(Env):
+    """
+    enviroment created by modules.
+    """
     def __init__(self, parent=None, table={}):
         super(ModuleEnv, self).__init__(parent, table)
 
 
 class ClassEnv(Env):
+    """
+    environment created by classes.
+    """
     def __init__(self, parent=None, table={}):
         super(ClassEnv, self).__init__(parent, table)
 
 
 class InstanceEnv(Env):
+    """
+    environment created by instances.
+    """
     def __init__(self, parent=None, table={}):
         super(InstanceEnv, self).__init__(parent, table)
-
 
