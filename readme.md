@@ -11,7 +11,7 @@ This repository is a python interpreter which is implemented by python itself.
 ## needs to be done
 
 - exceptions
-- more tests to finds bugs
+- more tests to find bugs
 
 ## the end
 
