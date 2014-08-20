@@ -81,8 +81,13 @@ class ExpEvaluator(object):
     """
     evaluator of expression
     """
-    def __init__(self):
-        pass
+    _instance = None
+
+    @staticmethod
+    def instance():
+        if ExpEvaluator._instance is None:
+            ExpEvaluator._instance = ExpEvaluator()
+        return ExpEvaluator._instance
 
     def dispatch(self, exp, env):
         "Dispatcher function, dispatching exp type T to method _T."
@@ -377,14 +382,19 @@ class BlockEvaluator(object):
               2. a Value instance: means current statement is a return
                  tatement
     """
-    def __init__(self):
-        pass
+    _instance = None
+
+    @staticmethod
+    def instance():
+        if BlockEvaluator._instance is None:
+            BlockEvaluator._instance = BlockEvaluator()
+        return BlockEvaluator._instance
 
     def eval(self, stmts, env):
         for stmt in stmts:
             # print interp.cur_mod
             # print interp
-            call_stk.set_cur_node(stmt, interp.cur_mod.fname)
+            call_stk.set_cur_node(stmt, Interpreter.instance().cur_mod.fname)
 
             ret = self.dispatch(stmt, env)
             if ret == "cont":
@@ -532,7 +542,7 @@ class BlockEvaluator(object):
 
     def _Import(self, stmt, env):
         for a in stmt.names:
-            mod = interp.load_module(a.name)
+            mod = Interpreter.instance().load_module(a.name)
             if a.asname is not None:
                 env.put_or_update(a.asname, mod)
             else:
@@ -548,7 +558,7 @@ class BlockEvaluator(object):
         level: 0 is absolute import, 1 is current directory,
                2 is parent directory
         """
-        mod = interp.load_module(stmt.module, stmt.level)
+        mod = Interpreter.instance().load_module(stmt.module, stmt.level)
         if IS(mod, PackageValue):     # a package
             for a in stmt.names:      # from XXX import *
                 if a == "*":
@@ -617,12 +627,20 @@ class BlockEvaluator(object):
 
 
 class Interpreter(object):
+    _instance = None
+
     def __init__(self):
         self.main_mod = None
         self.cur_mod = None
         self.import_stk = []                # detect the import cycle
         self.mod_cache = {}
         self.root_dir = None    # main directory of the software
+
+    @staticmethod
+    def instance():
+        if Interpreter._instance is None:
+            Interpreter._instance = Interpreter()
+        return Interpreter._instance
 
     def start(self, fname):
         """
@@ -703,18 +721,15 @@ class Interpreter(object):
 ###############################################################
 # global instances and functions
 ###############################################################
-g_exp = ExpEvaluator()
 
 def value_of_exp(exp, env):
-    return g_exp.dispatch(exp, env)
+    return ExpEvaluator.instance().dispatch(exp, env)
 
-g_stmts = BlockEvaluator()
 def value_of_stmts(stmts, env):
-    return g_stmts.eval(stmts, env)
+    return BlockEvaluator.instance().eval(stmts, env)
 
-interp = Interpreter()
 
 if __name__ == '__main__':
-    # interp.start("test/oop.py")
-    interp.start("test/2.py")
-    # interp.start("test/1.py")
+    # Interpreter.instance().start("test/oop.py")
+    Interpreter.instance().start("test/2.py")
+    # Interpreter.instance().start("test/1.py")

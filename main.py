@@ -2,11 +2,12 @@
 # -*- coding: utf-8 -*-
 import os.path
 
-from interpreter import interp
+from interpreter import Interpreter
 
 if __name__ == "__main__":
     start_dir = os.path.dirname(__file__)
 
-    # interp.start(os.path.join(start_dir, "test/oop.py"))
-    # interp.start(os.path.join(start_dir, "test/2.py"))
-    interp.start(os.path.join(start_dir, "test/1.py"))
+    # Interpreter.instance().start("test/oop.py")
+    # Interpreter.instance().start("test/2.py")
+    Interpreter.instance().start("test/1.py")
+
